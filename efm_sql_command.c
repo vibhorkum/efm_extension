@@ -86,7 +86,7 @@ typedef struct OutputContext
 	size_t 		len;
 } OutputContext;
 
-
+/* efm command generator */
 static char * get_efm_command(char *efm_command, char *efm_argument)
 {
      int   len;
@@ -105,7 +105,7 @@ static char * get_efm_command(char *efm_command, char *efm_argument)
      return efm_complete_command;
 }
 
-
+/* efm function to execute efm command for allow connection */
 Datum
 efm_allow_node(PG_FUNCTION_ARGS)
 {
@@ -122,6 +122,7 @@ efm_allow_node(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(result);
 }
 
+/* efm function to disallow node */
 Datum
 efm_disallow_node(PG_FUNCTION_ARGS)
 {
@@ -138,6 +139,7 @@ efm_disallow_node(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(result);
 }
 
+/* efm function for failover */
 Datum
 efm_failover(PG_FUNCTION_ARGS)
 {
@@ -170,6 +172,7 @@ efm_switchover(PG_FUNCTION_ARGS)
         PG_RETURN_INT32(result);
 }
 
+/* efm resume monitoring */
 Datum
 efm_resume_monitoring(PG_FUNCTION_ARGS)
 {
@@ -186,7 +189,7 @@ efm_resume_monitoring(PG_FUNCTION_ARGS)
         PG_RETURN_INT32(result);
 }
 
-
+/* efm set priority */
 Datum
 efm_set_priority(PG_FUNCTION_ARGS)
 {
@@ -235,14 +238,7 @@ efm_cluster_status(PG_FUNCTION_ARGS)
 		char		*exec_string;
 		MemoryContext oldcontext;
 
-		/*
-		 * This chunk will eventually be freed by PG executor. I'm not sure if
-		 * it's wise to free it immediately after the popen() call - might
-		 * libc still need it during output retrieval? In any case, we don't
-		 * need to access the chunk anymore, so it's ok to define it as a
-		 * local variable here.
-		 */
-      		if (strcmp(output_type,"text") == 0 )
+    		if (strcmp(output_type,"text") == 0 )
 				exec_string = get_efm_command("cluster-status", "" );
 	        else if (strcmp(output_type,"json") == 0 )
 				exec_string = get_efm_command("cluster-status-json", "" );
@@ -251,11 +247,6 @@ efm_cluster_status(PG_FUNCTION_ARGS)
 		
 		funcctx = SRF_FIRSTCALL_INIT();
 
-		/*
-		 * palloc0() (unlike palloc()) sets the allocated chung to all zeroes,
-		 * so we don't need to explicitly set ocxt->line to NULL, nor
-		 * ocxt->len to 0.
-		 */
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 		ocxt = (OutputContext *) palloc0(sizeof(OutputContext));
 		MemoryContextSwitchTo(oldcontext);
@@ -343,27 +334,13 @@ efm_list_properties(PG_FUNCTION_ARGS)
                 char            *parse_command = "| grep -v \"^#\" | sed '/^$/d'";
 
                 MemoryContext oldcontext;
- 
-                /*
-                 * This chunk will eventually be freed by PG executor. I'm not sure if
-                 * it's wise to free it immediately after the popen() call - might
-                 * libc still need it during output retrieval? In any case, we don't
-                 * need to access the chunk anymore, so it's ok to define it as a
-                 * local variable here.
-                 */
-                
-                
+
                 len = strlen(efm_sudo) + 1 + strlen(cat_location) + 1 + strlen(efm_cluster_name) + 1 + strlen(".properties") + 1 + strlen(parse_command) + 1;
 		exec_string = palloc(len);
                 snprintf(exec_string, len, "%s%s%s %s",cat_location,efm_cluster_name,".properties",parse_command);
 
                 funcctx = SRF_FIRSTCALL_INIT();
 
-                /*
-                 * palloc0() (unlike palloc()) sets the allocated chung to all zeroes,
-                 * so we don't need to explicitly set ocxt->line to NULL, nor
-                 * ocxt->len to 0.
-                 */
                 oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
                 ocxt = (OutputContext *) palloc0(sizeof(OutputContext));
                 MemoryContextSwitchTo(oldcontext);
