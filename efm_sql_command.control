@@ -1,0 +1,6 @@
+comment = 'SQL interface for efm commands'
+default_version = '1.0'
+module_pathname = '$libdir/efm_sql_command'
+relocatable = false
+schema = efm_extension
+
