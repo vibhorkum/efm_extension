@@ -141,17 +141,55 @@ INFO:  efm command is available
  172.17.0.2 | xloginfo | "DB is not in recovery."
 (6 rows)
 
-edb=# select * from efm_extension.efm_nodes_details ;
-INFO:  efm command is available 
-  node_ip   | property |          value           
-------------+----------+--------------------------
- 172.17.0.2 | db       | "UNKNOWN"
- 172.17.0.2 | info     | " "
- 172.17.0.2 | type     | "Idle"
- 172.17.0.2 | xlog     | "0/35BFC10"
- 172.17.0.2 | agent    | "UP"
- 172.17.0.2 | xloginfo | "DB is not in recovery."
-(6 rows)
+edb=# select * from efm_extension.efm_local_properties ;
+           name            |              value               
+---------------------------+----------------------------------
+ efm.license               | 
+ db.user                   | efm
+ db.password.encrypted     | 074b627bf50168881d246c5dd32fd8d0
+ db.port                   | 5444
+ db.database               | edb
+ db.service.owner          | enterprisedb
+ db.service.name           | edb-as-9.6
+ db.bin                    | /usr/edb/as9.6/bin
+ db.recovery.conf.dir      | /pgdata
+ jdbc.ssl                  | false
+ jdbc.ssl.mode             | verify-ca
+ user.email                | vibhor.kumar@enterprisedb.com
+ script.notification       | 
+ bind.address              | 172.17.0.2:5430
+ admin.port                | 5431
+ is.witness                | false
+ local.period              | 10
+ local.timeout             | 60
+ local.timeout.final       | 10
+ remote.timeout            | 10
+ node.timeout              | 50
+ pingServerIp              | 8.8.8.8
+ pingServerCommand         | /bin/ping -q -c3 -w5
+ auto.allow.hosts          | true
+ db.reuse.connection.count | 0
+ auto.failover             | true
+ auto.reconfigure          | true
+ promotable                | true
+ minimum.standbys          | 0
+ recovery.check.period     | 2
+ auto.resume.period        | 0
+ virtualIp                 | 
+ virtualIp.interface       | 
+ virtualIp.netmask         | 
+ script.fence              | 
+ script.post.promotion     | 
+ script.resumed            | 
+ script.db.failure         | 
+ script.master.isolated    | 
+ sudo.command              | sudo
+ sudo.user.command         | sudo -u %u
+ jgroups.loglevel          | INFO
+ efm.loglevel              | INFO
+ jvm.options               | -Xmx32m
+(44 rows)
+
 
 ````
-```
+
