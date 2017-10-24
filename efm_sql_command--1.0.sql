@@ -79,3 +79,29 @@ FROM
                 efm_extension.efm_cluster_status ('json'))::jsonb)
     WHERE
         KEY = 'nodes';
+
+
+CREATE OR REPLACE FUNCTION efm.pg_is_in_recovery() 
+    RETURNS BOOLEAN
+    LANGUAGE SQL
+AS $FUNCTION$
+SELECT
+    CASE WHEN inet_client_addr() = inet_server_addr() THEN
+        pg_catalog.pg_is_in_recovery()
+    ELSE
+        TRUE
+END;
+$FUNCTION$;
+
+CREATE OR REPLACE FUNCTION efm.pg_last_xlog_replay_location() 
+    RETURNS pg_lsn
+    LANGUAGE SQL
+AS $FUNCTION$
+SELECT
+    CASE WHEN pg_catalog.pg_is_in_recovery() = FALSE THEN
+        pg_catalog.pg_current_xlog_location()
+    ELSE
+        pg_catalog.pg_last_xlog_replay_location()
+END;
+$FUNCTION$;
+
