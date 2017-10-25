@@ -81,7 +81,7 @@ FROM
         KEY = 'nodes';
 
 
-CREATE OR REPLACE FUNCTION efm.pg_is_in_recovery() 
+CREATE OR REPLACE FUNCTION efm_extension.pg_is_in_recovery() 
     RETURNS BOOLEAN
     LANGUAGE SQL
 AS $FUNCTION$
@@ -93,7 +93,7 @@ SELECT
 END;
 $FUNCTION$;
 
-CREATE OR REPLACE FUNCTION efm.pg_last_xlog_replay_location() 
+CREATE OR REPLACE FUNCTION efm_extension.pg_last_xlog_replay_location() 
     RETURNS pg_lsn
     LANGUAGE SQL
 AS $FUNCTION$
