@@ -297,3 +297,118 @@ END;
 $FUNCTION$;
 
 REVOKE ALL ON FUNCTION efm_extension.pg_last_xlog_replay_location() FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION efm_extension.grant_access_to_user(TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS
+$FUNCTION$
+DECLARE 
+  rec RECORD;
+  sql_cmd TEXT;
+
+BEGIN
+   sql_cmd := $SQL$ SELECT
+    CASE WHEN extn_objects ~* '^function' THEN
+        'GRANT EXECUTE ON ' || extn_objects 
+        WHEN extn_objects ~* '^view' THEN
+        'GRANT SELECT ON ' || pg_catalog.regexp_replace(extn_objects,'^view ','')
+    END as grant_cmd
+FROM (
+    SELECT
+        pg_catalog.pg_describe_object(classid,
+            objid,
+            0) AS extn_objects
+    FROM
+        pg_catalog.pg_depend
+    WHERE
+        refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+        AND refobjid = (
+            SELECT
+                e.oid
+            FROM
+                pg_catalog.pg_extension e
+            WHERE
+                e.extname ~ '^(efm_sql_command)$'
+            ORDER BY
+                1)
+            AND deptype = 'e'
+        ORDER BY
+            1) foo
+    WHERE
+        extn_objects ~* '^view'
+        OR extn_objects ~* '^function' $SQL$;
+  EXECUTE 'GRANT USAGE ON SCHEMA efm_extension TO '||$1;
+  FOR rec IN EXECUTE sql_cmd
+  LOOP
+     RAISE NOTICE '% TO %',rec.grant_cmd,$1;
+     EXECUTE rec.grant_cmd || ' TO '||$1;
+  END LOOP;
+  RETURN true;
+  EXCEPTION
+    WHEN OTHERS THEN
+       RETURN false;
+END;
+$FUNCTION$;
+
+REVOKE ALL ON FUNCTION efm_extension.grant_access_to_user(TEXT) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION efm_extension.revoke_access_from_user(TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS
+$FUNCTION$
+DECLARE 
+  rec RECORD;
+  sql_cmd TEXT;
+
+BEGIN
+   sql_cmd := $SQL$ SELECT
+    CASE WHEN extn_objects ~* '^function' THEN
+        'REVOKE EXECUTE ON ' || extn_objects 
+        WHEN extn_objects ~* '^view' THEN
+        'REVOKE SELECT ON ' || pg_catalog.regexp_replace(extn_objects,'^view ','')
+    END as grant_cmd
+FROM (
+    SELECT
+        pg_catalog.pg_describe_object(classid,
+            objid,
+            0) AS extn_objects
+    FROM
+        pg_catalog.pg_depend
+    WHERE
+        refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+        AND refobjid = (
+            SELECT
+                e.oid
+            FROM
+                pg_catalog.pg_extension e
+            WHERE
+                e.extname ~ '^(efm_sql_command)$'
+            ORDER BY
+                1)
+            AND deptype = 'e'
+        ORDER BY
+            1) foo
+    WHERE
+        extn_objects ~* '^view'
+        OR extn_objects ~* '^function' $SQL$;
+  
+  EXECUTE 'REVOKE USAGE ON SCHEMA efm_extension FROM '||$1;
+
+  FOR rec IN EXECUTE sql_cmd
+  LOOP
+     RAISE NOTICE '% FROM %',rec.grant_cmd,$1;
+     EXECUTE rec.grant_cmd || ' FROM '||$1;
+  END LOOP;
+  RETURN true;
+  EXCEPTION
+    WHEN OTHERS THEN
+       RETURN false;
+END;
+$FUNCTION$;
+
+REVOKE EXECUTE ON FUNCTION efm_extension.revoke_access_from_user(TEXT) FROM PUBLIC;
+
