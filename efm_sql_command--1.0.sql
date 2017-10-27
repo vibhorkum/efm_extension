@@ -92,15 +92,24 @@ FROM
 CREATE VIEW efm_nodes_details
 AS
 SELECT
-    jsonb_each(VALUE).KEY AS node_ip,
-    jsonb_each(jsonb_each(VALUE).VALUE).KEY AS property,
-    jsonb_each(jsonb_each(VALUE).VALUE).VALUE AS VALUE
-FROM
-    jsonb_each((
-            SELECT
-                efm_extension.efm_cluster_status ('json'))::jsonb)
-    WHERE
-        KEY = 'nodes';
+    KEY AS node_ip,
+    VALUE ->> 'type' AS ROLE,
+    VALUE ->> 'db' AS db_status,
+    VALUE ->> 'xlog' AS xlog,
+    VALUE -> 'agent' AS agent_status,
+    VALUE ->> 'xloginfo' AS xloginfo,
+    VALUE ->> 'info' AS info
+FROM (
+    SELECT
+        jsonb_each(VALUE::jsonb).*
+    FROM
+        jsonb_each(((
+                    SELECT
+                        efm_extension.efm_cluster_status ('json'::text) AS efm_cluster_status))::jsonb)
+            jsonb_each(KEY,
+                VALUE)
+        WHERE
+            jsonb_each.key = 'nodes'::text) foo;
 
 
 /* adding efm pgpool monitoring capability functions */
@@ -134,7 +143,8 @@ CREATE TABLE efm_extension.pgpool_nodes(
    port INTEGER,
    database TEXT,
    username TEXT,
-   password bytea);
+   password bytea,
+   CONSTRAINT pgpool_nodes_pkey PRIMARY KEY(hostname,port,database));
 
 REVOKE ALL ON TABLE efm_extension.pgpool_nodes FROM PUBLIC;
 
@@ -238,6 +248,27 @@ END;
 $FUNCTION$;
 
 REVOKE ALL ON FUNCTION efm_extension.add_pgpool_monitoring(TEXT, INTEGER, TEXT, TEXT, TEXT) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION efm_extension.remove_pgpool_monitoring(TEXT, INTEGER, TEXT, TEXT, TEXT)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS
+$FUNCTION$
+DECLARE
+  cmd_string TEXT;
+  server_name TEXT ;
+BEGIN
+    DELETE FROM efm_extension.pgpool_nodes
+       WHERE hostname=$1 AND port=$2 and database=$3;
+    RETURN TRUE;
+  EXCEPTION
+        WHEN OTHERS THEN
+        RETURN FALSE;
+END;
+$FUNCTION$;
+
+REVOKE ALL ON FUNCTION efm_extension.remove_pgpool_monitoring(TEXT, INTEGER, TEXT, TEXT, TEXT) FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION efm_extension.pg_is_in_recovery()
     RETURNS BOOLEAN
