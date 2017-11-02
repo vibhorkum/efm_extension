@@ -101,7 +101,7 @@ SELECT
     VALUE ->> 'info' AS info
 FROM (
     SELECT
-        jsonb_each(VALUE::jsonb).*
+        (jsonb_each(VALUE::jsonb)).*
     FROM
         jsonb_each(((
                     SELECT
@@ -110,7 +110,6 @@ FROM (
                 VALUE)
         WHERE
             jsonb_each.key = 'nodes'::text) foo;
-
 
 /* adding efm pgpool monitoring capability functions */
 CREATE TYPE efm_extension.pool_status AS (
