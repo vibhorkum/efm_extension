@@ -1,0 +1,8 @@
+comment = 'SQL interface for efm commands'
+default_version = '1.0'
+module_pathname = '$libdir/efm_extension'
+superuser = true
+requires = 'dblink, pgcrypto'
+relocatable = false
+schema = efm_extension
+

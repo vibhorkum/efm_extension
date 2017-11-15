@@ -63,8 +63,8 @@ edb=# show efm.edb_sudo ;
 ```
 # pg_config needs to be on the path!
 # if non-default pg_config location is needed one can specify it similar to USE_PGXS i.e. PG_CONFIG=/path/...
-git clone https://github.com/vibhorkum/efm_sql_command
-cd efm_sql_command
+git clone https://github.com/vibhorkum/efm_extension
+cd efm_extension
 make
 sudo make install
 
@@ -73,7 +73,7 @@ sudo make install
 # Usage
 
 ```
-CREATE EXTENSION efm_sql_command;    -- needs to be done by a superuser
+CREATE EXTENSION efm_extension;    -- needs to be done by a superuser
 
 edb=# select efm_extension.efm_cluster_status('text');
 INFO:  efm command is available 
