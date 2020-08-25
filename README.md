@@ -58,6 +58,7 @@ edb=# select name, setting from pg_settings where name ~* '^efm.';
     ALTER SYSTEM SET efm.command_path TO '/usr/edb/efm-3.10/bin/efm';
     ALTER SYSTEM SET efm.edb_sudo TO 'sudo -u efm';
     ALTER SYSTEM SET efm.properties_location TO '/usr/edb/efm-3.10';
+    SELECT pg_reload_conf();
 ```
 
 # Installation
