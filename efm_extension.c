@@ -27,14 +27,16 @@ PG_FUNCTION_INFO_V1(efm_resume_monitoring);
 PG_FUNCTION_INFO_V1(efm_list_properties);
 
 /* GUC declaration */
-char *efm_path_command = "/usr/efm-2.1/bin/efm";
+char *efm_path_command = NULL;
 char *efm_sudo = NULL;
 char *efm_cluster_name = NULL;
+char *efm_properties_file_loc = NULL;
 
 /* function declaration */
 void _PG_init(void);
 static void requireSuperuser(void);
 static void check_efm_cluster_name_sudo(char *clustername, char *efm_sudo);
+static void check_efm_properties_file(char *efm_properties);
 
 
 /*
@@ -57,11 +59,27 @@ check_efm_cluster_name_sudo(char *clustername, char *efm_sudo)
 static void command_exists(void)
 {
         int is_exists =  access(efm_path_command, F_OK);
-        if ( is_exists == 0  )
-		elog(INFO, "%s ", "efm command is available");
-	else
+        if ( is_exists != 0  )
                 elog(ERROR,"%s %s",efm_path_command, "command not available");
 }
+
+ /* 
+  * check if properties file is defined and exists
+  */
+
+static void
+check_efm_properties_file(char *efm_properties)
+{
+   int is_exists;
+
+   if (efm_properties == NULL)
+      elog(ERROR,"efm.properties_location is undefined");
+
+   is_exists = access(efm_properties, F_OK);
+   if ( is_exists != 0  )
+        elog(ERROR,"%s %s",efm_properties, "file not available");
+}
+
 
 
 /*
@@ -329,15 +347,26 @@ efm_list_properties(PG_FUNCTION_ARGS)
         if (SRF_IS_FIRSTCALL())
         {
                 char            *exec_string;
-                char            *cat_location = "cat /etc/efm-2.1/";
+                char            *efm_properties;
+                char            *cat_properties;
                 int             len;
                 char            *parse_command = "| grep -v \"^#\" | sed '/^$/d'";
 
                 MemoryContext oldcontext;
+                
+                len = strlen(efm_properties_file_loc) + 1 + strlen("/") + 1+ strlen(efm_cluster_name) + 1 + strlen(".properties");
+                efm_properties = palloc(len);
+                snprintf(efm_properties, len, "%s/%s%s",efm_properties_file_loc, efm_cluster_name, ".properties");
+                check_efm_properties_file(efm_properties);
 
-                len = strlen(efm_sudo) + 1 + strlen(cat_location) + 1 + strlen(efm_cluster_name) + 1 + strlen(".properties") + 1 + strlen(parse_command) + 1;
+                len = strlen("cat ") + 1 + strlen(efm_properties) + 1;
+                cat_properties = palloc(len);
+
+                snprintf(cat_properties, len, "cat %s",efm_properties);
+                
+                len = strlen(efm_sudo) + 1 + strlen(cat_properties) + 1 + strlen(parse_command) + 1;
 		exec_string = palloc(len);
-                snprintf(exec_string, len, "%s%s%s %s",cat_location,efm_cluster_name,".properties",parse_command);
+                snprintf(exec_string, len, "%s %s",cat_properties,parse_command);
 
                 funcctx = SRF_FIRSTCALL_INIT();
 
@@ -425,5 +454,20 @@ _PG_init(void)
                                     NULL,
                                     PGC_SUSET,
                                     0, NULL, NULL, NULL);
+        DefineCustomStringVariable( "efm.command_path",
+                                    "Define the command_path for efm",
+                                    "It is undefined by default",
+                                    &efm_path_command,
+                                    NULL,
+                                    PGC_SUSET,
+                                    0, NULL, NULL, NULL);
+        DefineCustomStringVariable( "efm.properties_location",
+                                    "Define director of efm propeties file",
+                                    "It is undefined by default",
+                                    &efm_properties_file_loc,
+                                    NULL,
+                                    PGC_SUSET,
+                                    0, NULL, NULL, NULL);
+
 
 }
