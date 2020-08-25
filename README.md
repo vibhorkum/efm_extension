@@ -148,12 +148,12 @@ edb=# select * from efm_extension.efm_local_properties ;
  db.port                   | 5444
  db.database               | edb
  db.service.owner          | enterprisedb
- db.service.name           | edb-as-9.6
- db.bin                    | /usr/edb/as9.6/bin
+ db.service.name           | edb-as-10
+ db.bin                    | /usr/edb/as10/bin
  db.recovery.conf.dir      | /pgdata
  jdbc.ssl                  | false
  jdbc.ssl.mode             | verify-ca
- user.email                | vibhor.kumar@enterprisedb.com
+ user.email                | unknow@gmail.com
  script.notification       | 
  bind.address              | 172.17.0.2:5430
  admin.port                | 5431
