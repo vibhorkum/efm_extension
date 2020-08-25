@@ -314,15 +314,15 @@ $FUNCTION$;
 
 REVOKE ALL ON FUNCTION efm_extension.pg_is_in_recovery() FROM PUBLIC;
 
-CREATE OR REPLACE FUNCTION efm_extension.pg_last_xlog_replay_location() 
+CREATE OR REPLACE FUNCTION efm_extension.pg_last_wal_replay_lsn() 
     RETURNS pg_lsn
     LANGUAGE SQL
 AS $FUNCTION$
 SELECT
     CASE WHEN pg_catalog.pg_is_in_recovery() = FALSE THEN
-        pg_catalog.pg_current_xlog_location()
+        pg_catalog.pg_current_wal_lsn()
     ELSE
-        pg_catalog.pg_last_xlog_replay_location()
+        pg_catalog.pg_last_wal_replay_lsn()
 END;
 $FUNCTION$;
 
