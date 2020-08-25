@@ -1,4 +1,4 @@
-# A EPAS/PostgreSQL extension to enable execution of EFM commands through the normal database connection
+# A EPAS/PostgreSQL (version >=10) extension to enable execution of EFM commands through the normal database connection
 
 # Overview
 
