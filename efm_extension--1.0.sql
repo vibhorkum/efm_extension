@@ -326,7 +326,7 @@ SELECT
 END;
 $FUNCTION$;
 
-REVOKE ALL ON FUNCTION efm_extension.pg_last_xlog_replay_location() FROM PUBLIC;
+REVOKE ALL ON FUNCTION efm_extension.pg_last_wal_replay_lsn() FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION efm_extension.grant_access_to_user(TEXT)
 RETURNS BOOLEAN
