@@ -81,11 +81,16 @@ CREATE VIEW efm_local_properties
 AS
 SELECT
     (regexp_match(foo, '^([^=]+)=(.*)$'))[1] AS name,
-    (regexp_match(foo, '^([^=]+)=(.*)$'))[2] AS VALUE
+    CASE 
+        -- SECURITY: Redact sensitive property values
+        WHEN (regexp_match(foo, '^([^=]+)=(.*)$'))[1] ~* '(password|secret|token|key|license)' 
+        THEN '***REDACTED***'
+        ELSE (regexp_match(foo, '^([^=]+)=(.*)$'))[2]
+    END AS VALUE
 FROM
     efm_extension.efm_list_properties () foo
 WHERE
-    foo ~ '^[^=]+=';
+    foo ~ '^[^=]+';
 
 CREATE VIEW efm_nodes_details
 AS

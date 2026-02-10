@@ -1,5 +1,10 @@
 #include "postgres.h"
 
+/* PostgreSQL Version Guard - Support only PG 12+ */
+#if PG_VERSION_NUM < 120000
+#error "PostgreSQL 12 or later is required. This extension does not support PostgreSQL versions older than 12."
+#endif
+
 #include "fmgr.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
@@ -11,10 +16,21 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <limits.h>
 
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
 #endif
+
+/* Security limits */
+#define MAX_CLUSTER_NAME_LEN 64
+#define MAX_NODE_IP_LEN 255
+#define MAX_PRIORITY_LEN 16
+#define MAX_OUTPUT_LINES 10000
+#define MAX_LINE_LENGTH 8192
+#define MAX_COMMAND_LEN 2048
 
 /* execute some generic command and return status */
 PG_FUNCTION_INFO_V1(efm_cluster_status);
@@ -31,6 +47,14 @@ char *efm_path_command = NULL;
 char *efm_sudo = NULL;
 char *efm_cluster_name = NULL;
 char *efm_properties_file_loc = NULL;
+int efm_version = 4; /* Default to EFM 4.x for backward compatibility */
+
+/* Security-related function declarations */
+static bool is_safe_argument(const char *arg);
+static bool is_safe_cluster_name(const char *name);
+static size_t safe_add_lengths(size_t a, size_t b);
+static bool check_efm_version_hook(int *newval, void **extra, GucSource source);
+static bool check_cluster_name_hook(char **newval, void **extra, GucSource source);
 
 /* function declaration */
 void _PG_init(void);
@@ -91,7 +115,133 @@ requireSuperuser(void)
 	if (!superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 (errmsg("only superuser may access generic file functions"))));
+				 (errmsg("only superuser may execute EFM commands"),
+				  errhint("Grant superuser privilege or contact your database administrator"))));
+}
+
+/*
+ * SECURITY: Validate that argument contains only safe characters
+ * Whitelist: alphanumeric, dot, dash, underscore, colon (for IP:port)
+ * Prevents command injection via shell metacharacters
+ */
+static bool
+is_safe_argument(const char *arg)
+{
+	const char *p;
+	size_t len;
+	
+	if (arg == NULL || arg[0] == '\0')
+		return false;
+	
+	len = strlen(arg);
+	
+	/* Length check to prevent buffer issues */
+	if (len > MAX_NODE_IP_LEN)
+		return false;
+	
+	/* Whitelist validation - only allow safe characters */
+	for (p = arg; *p != '\0'; p++)
+	{
+		if (!(((*p >= 'a' && *p <= 'z') ||
+			   (*p >= 'A' && *p <= 'Z') ||
+			   (*p >= '0' && *p <= '9') ||
+			   (*p == '.') || (*p == '-') || (*p == '_') || (*p == ':'))))
+		{
+			return false;  /* Reject shell metacharacters */
+		}
+	}
+	
+	return true;
+}
+
+/*
+ * SECURITY: Validate cluster name for path safety
+ * Prevents path traversal attacks in properties file access
+ */
+static bool
+is_safe_cluster_name(const char *name)
+{
+	const char *p;
+	size_t len;
+	
+	if (name == NULL || name[0] == '\0')
+		return false;
+	
+	len = strlen(name);
+	
+	/* Length check */
+	if (len > MAX_CLUSTER_NAME_LEN)
+		return false;
+	
+	/* Reject path separators and parent directory references */
+	if (strchr(name, '/') != NULL || strchr(name, '\\') != NULL || 
+		strstr(name, "..") != NULL || name[0] == '.')
+		return false;
+	
+	/* Whitelist: alphanumeric, dash, underscore only */
+	for (p = name; *p != '\0'; p++)
+	{
+		if (!(((*p >= 'a' && *p <= 'z') ||
+			   (*p >= 'A' && *p <= 'Z') ||
+			   (*p >= '0' && *p <= '9') ||
+			   (*p == '-') || (*p == '_'))))
+		{
+			return false;
+		}
+	}
+	
+	return true;
+}
+
+/*
+ * SECURITY: Safe addition to prevent integer overflow in buffer calculations
+ */
+static size_t
+safe_add_lengths(size_t a, size_t b)
+{
+	if (a > (SIZE_MAX - b))
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("command length exceeds safe limit")));
+	return a + b;
+}
+
+/*
+ * GUC check hook for efm.version - only allow 4 or 5
+ */
+static bool
+check_efm_version_hook(int *newval, void **extra, GucSource source)
+{
+	(void) extra;   /* unused */
+	(void) source;  /* unused */
+	
+	if (*newval != 4 && *newval != 5)
+	{
+		GUC_check_errdetail("efm.version must be 4 or 5");
+		return false;
+	}
+	return true;
+}
+
+/*
+ * GUC check hook for efm.cluster_name - validate for path safety
+ */
+static bool
+check_cluster_name_hook(char **newval, void **extra, GucSource source)
+{
+	(void) extra;   /* unused */
+	(void) source;  /* unused */
+	
+	if (*newval == NULL || **newval == '\0')
+		return true;  /* Allow NULL/empty during initialization */
+	
+	if (!is_safe_cluster_name(*newval))
+	{
+		GUC_check_errdetail("cluster name contains unsafe characters or path components");
+		GUC_check_errhint("Use only alphanumeric characters, dashes, and underscores");
+		return false;
+	}
+	return true;
 }
 
 
@@ -104,23 +254,69 @@ typedef struct OutputContext
 	size_t 		len;
 } OutputContext;
 
-/* efm command generator */
+/* efm command generator with security validation */
 static char * get_efm_command(char *efm_command, char *efm_argument)
 {
-     int   len;
-     char *efm_complete_command;
+	size_t len;
+	char *efm_complete_command;
 
-     command_exists(); 
-     check_efm_cluster_name_sudo(efm_cluster_name, efm_sudo);
- 
-     /* calculate efm comand length */
-     len = strlen(efm_sudo) + 1 + strlen(efm_path_command) + 1 + strlen(efm_command) + 1 + strlen(efm_cluster_name) + 1 +strlen(efm_argument) + 1;
- 
-     efm_complete_command = palloc(len);
- 
-     snprintf(efm_complete_command, len, "%s %s %s %s %s", efm_sudo, efm_path_command, efm_command, efm_cluster_name, efm_argument);
- 
-     return efm_complete_command;
+	command_exists(); 
+	check_efm_cluster_name_sudo(efm_cluster_name, efm_sudo);
+
+	/* SECURITY: Validate command name (should be from internal list only) */
+	if (!is_safe_argument(efm_command))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid EFM command: contains unsafe characters")));
+
+	/* SECURITY: Validate argument if provided */
+	if (efm_argument != NULL && efm_argument[0] != '\0')
+	{
+		/* Special handling for -switchover flag */
+		if (strcmp(efm_argument, "-switchover") != 0 && !is_safe_argument(efm_argument))
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid argument: contains unsafe characters"),
+					 errdetail("Argument: %s", efm_argument),
+					 errhint("Arguments must contain only alphanumeric characters, dots, dashes, underscores, and colons")));
+		}
+	}
+
+	/* SECURITY: Calculate command length with overflow protection */
+	len = 0;
+	len = safe_add_lengths(len, strlen(efm_sudo));
+	len = safe_add_lengths(len, 1);  /* space */
+	len = safe_add_lengths(len, strlen(efm_path_command));
+	len = safe_add_lengths(len, 1);  /* space */
+	len = safe_add_lengths(len, strlen(efm_command));
+	len = safe_add_lengths(len, 1);  /* space */
+	len = safe_add_lengths(len, strlen(efm_cluster_name));
+	
+	if (efm_argument != NULL && efm_argument[0] != '\0')
+	{
+		len = safe_add_lengths(len, 1);  /* space */
+		len = safe_add_lengths(len, strlen(efm_argument));
+	}
+	
+	len = safe_add_lengths(len, 1);  /* null terminator */
+
+	/* Additional safety check */
+	if (len > MAX_COMMAND_LEN)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("command exceeds maximum length (%d bytes)", MAX_COMMAND_LEN)));
+
+	efm_complete_command = palloc(len);
+
+	if (efm_argument != NULL && efm_argument[0] != '\0')
+		snprintf(efm_complete_command, len, "%s %s %s %s %s", 
+				 efm_sudo, efm_path_command, efm_command, efm_cluster_name, efm_argument);
+	else
+		snprintf(efm_complete_command, len, "%s %s %s %s", 
+				 efm_sudo, efm_path_command, efm_command, efm_cluster_name);
+
+	return efm_complete_command;
 }
 
 /* efm function to execute efm command for allow connection */
@@ -161,50 +357,50 @@ efm_disallow_node(PG_FUNCTION_ARGS)
 Datum
 efm_failover(PG_FUNCTION_ARGS)
 {
-        int     result;
-        char    *exec_string;
-        
-        requireSuperuser();
+	int     result;
+	char    *exec_string;
+	
+	(void) fcinfo;  /* unused */
+	requireSuperuser();
 
-        exec_string = get_efm_command("promote","");
-      //  elog(NOTICE,"%s",exec_string);
+	exec_string = get_efm_command("promote","");
 
-        result = system(exec_string);
-        pfree(exec_string);
-        PG_RETURN_INT32(result);
+	result = system(exec_string);
+	pfree(exec_string);
+	PG_RETURN_INT32(result);
 }
 
 Datum
 efm_switchover(PG_FUNCTION_ARGS)
 {
-        int     result;
-        char    *exec_string;
+	int     result;
+	char    *exec_string;
 
-        requireSuperuser();
+	(void) fcinfo;  /* unused */
+	requireSuperuser();
 
-        exec_string = get_efm_command("promote","-switchover");
-      //  elog(NOTICE,"%s",exec_string);
+	exec_string = get_efm_command("promote","-switchover");
 
-        result = system(exec_string);
-        pfree(exec_string);
-        PG_RETURN_INT32(result);
+	result = system(exec_string);
+	pfree(exec_string);
+	PG_RETURN_INT32(result);
 }
 
 /* efm resume monitoring */
 Datum
 efm_resume_monitoring(PG_FUNCTION_ARGS)
 {
-        int     result;
-        char    *exec_string;
+	int     result;
+	char    *exec_string;
 
-        requireSuperuser();
+	(void) fcinfo;  /* unused */
+	requireSuperuser();
 
-        exec_string = get_efm_command("resume","");
-       // elog(NOTICE,"%s",exec_string);
+	exec_string = get_efm_command("resume","");
 
-        result = system(exec_string);
-        pfree(exec_string);
-        PG_RETURN_INT32(result);
+	result = system(exec_string);
+	pfree(exec_string);
+	PG_RETURN_INT32(result);
 }
 
 /* efm set priority */
@@ -446,28 +642,39 @@ _PG_init(void)
                         	    &efm_cluster_name,
                         	    NULL,
                          	    PGC_SUSET,
-                         	    0, NULL, NULL, NULL);
-        DefineCustomStringVariable( "efm.edb_sudo",
+                         	    0,
+                         	    check_cluster_name_hook,  /* SECURITY: validate cluster name */
+                         	    NULL, NULL);
+	DefineCustomStringVariable( "efm.edb_sudo",
                                     "Define the sudo command for efm",
                                     "It is undefined by default",
                                     &efm_sudo,
                                     NULL,
                                     PGC_SUSET,
                                     0, NULL, NULL, NULL);
-        DefineCustomStringVariable( "efm.command_path",
+	DefineCustomStringVariable( "efm.command_path",
                                     "Define the command_path for efm",
                                     "It is undefined by default",
                                     &efm_path_command,
                                     NULL,
                                     PGC_SUSET,
                                     0, NULL, NULL, NULL);
-        DefineCustomStringVariable( "efm.properties_location",
+	DefineCustomStringVariable( "efm.properties_location",
                                     "Define directory of efm properties file",
                                     "It is undefined by default",
                                     &efm_properties_file_loc,
                                     NULL,
                                     PGC_SUSET,
                                     0, NULL, NULL, NULL);
-
-
+	DefineCustomIntVariable( "efm.version",
+                                 "EFM major version (4 or 5)",
+                                 "Determines EFM behavior. Default is 4 for backward compatibility.",
+                                 &efm_version,
+                                 4,              /* default: EFM 4.x */
+                                 4,              /* min */
+                                 5,              /* max */
+                                 PGC_SUSET,
+                                 0,
+                                 check_efm_version_hook,  /* validate only 4 or 5 */
+                                 NULL, NULL);
 }
