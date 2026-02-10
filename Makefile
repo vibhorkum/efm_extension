@@ -7,7 +7,7 @@ EXTENSION = efm_extension
 DATA = efm_extension--1.0.sql
 PGFILEDESC = "efm_extension - SQL interface to EFM commands"
 
-REGRESS = 01_basic 02_properties_parse
+REGRESS = 01_basic 02_properties_parse 03_security
 
 # Security and quality compiler flags (no -Wextra due to PG headers)
 PG_CPPFLAGS = -Wall -Werror -Wformat-security

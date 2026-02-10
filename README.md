@@ -1,4 +1,48 @@
-# A EPAS/PostgreSQL (version >=10) extension to enable execution of EFM commands through the normal database connection
+# EDB Failover Manager (EFM) Extension for PostgreSQL
+
+A PostgreSQL extension that provides a SQL interface to EDB Failover Manager (EFM) commands, allowing database administrators to execute EFM operations through normal database connections.
+
+## Version Compatibility
+
+### Supported PostgreSQL Versions
+
+| PostgreSQL Version | Support Status | Notes |
+|-------------------|----------------|-------|
+| 17.x | ✅ Supported | Current stable |
+| 16.x | ✅ Supported | Current stable |
+| 15.x | ✅ Supported | Current stable |
+| 14.x | ✅ Supported | Current stable |
+| 13.x | ✅ Supported | Current stable |
+| 12.x | ✅ Supported | Minimum supported |
+| 11.x and older | ❌ Unsupported | EOL - build will fail |
+
+**Policy**: This extension follows [PostgreSQL's official versioning policy](https://www.postgresql.org/support/versioning/). Only currently supported PostgreSQL major versions are supported.
+
+### Supported EFM Versions
+
+| EFM Version | Support Status | Configuration |
+|-------------|----------------|---------------|
+| 5.x | ✅ Supported | `SET efm.version = 5` |
+| 4.x | ✅ Supported | `SET efm.version = 4` (default) |
+| 3.10 | ⚠️ Limited | Legacy support |
+
+**Default**: EFM 4.x mode for backward compatibility.
+
+See [docs/compatibility.md](docs/compatibility.md) for detailed version information and migration guides.
+
+## Security
+
+**⚠️ SECURITY NOTICE**: This extension requires **superuser** privileges and executes shell commands via sudo. 
+
+- ✅ Input validation on all user-supplied data
+- ✅ Command injection prevention
+- ✅ Path traversal protection
+- ✅ Secret redaction in property views
+- ✅ Comprehensive security audit (see [docs/security_review.md](docs/security_review.md))
+
+**Shell Command Execution**: This extension executes EFM binary via shell commands with strict input validation. All inputs are sanitized against shell metacharacters to prevent command injection.
+
+---
 
 # Overview
 
@@ -51,13 +95,15 @@ edb=# select name, setting from pg_settings where name ~* '^efm.';
  efm.command_path        | /usr/edb/efm-3.10/bin/efm
  efm.edb_sudo            | sudo -u efm
  efm.properties_location | /etc/edb/efm-3.10
+ efm.version             | 4
 ```
 4. For setting above parameters user can use following `ALTER SYSTEM` command
 ```
     ALTER SYSTEM SET efm.cluster_name TO 'efm';
-    ALTER SYSTEM SET efm.command_path TO '/usr/edb/efm-3.10/bin/efm';
+    ALTER SYSTEM SET efm.command_path TO '/usr/edb/efm-4.9/bin/efm';
     ALTER SYSTEM SET efm.edb_sudo TO 'sudo -u efm';
-    ALTER SYSTEM SET efm.properties_location TO '/usr/edb/efm-3.10';
+    ALTER SYSTEM SET efm.properties_location TO '/etc/edb/efm-4.9';
+    ALTER SYSTEM SET efm.version TO 4;  -- or 5 for EFM 5.x
     SELECT pg_reload_conf();
 ```
 
@@ -191,3 +237,80 @@ edb=# select * from efm_extension.efm_local_properties ;
 
 ````
 
+
+## Security Notes
+
+### Secret Redaction
+
+The `efm_local_properties` view automatically redacts sensitive values:
+
+```sql
+SELECT * FROM efm_extension.efm_local_properties WHERE name LIKE '%password%';
+-- Result: name | value
+--         db.password.encrypted | ***REDACTED***
+```
+
+Properties containing the following keywords in their names are automatically redacted:
+- `password`
+- `secret`
+- `token`
+- `key`
+- `license`
+
+### Input Validation
+
+All user inputs are validated before execution:
+- Node IPs must contain only alphanumeric characters, dots, dashes, underscores, and colons
+- Cluster names must contain only alphanumeric characters, dashes, and underscores
+- Shell metacharacters are rejected (`;`, `|`, `&`, `$`, `` ` ``, etc.)
+
+Invalid inputs will result in an error:
+```sql
+SELECT efm_extension.efm_allow_node('192.168.1.1; rm -rf /');
+-- ERROR: invalid argument: contains unsafe characters
+```
+
+### Privilege Requirements
+
+**All EFM functions require superuser privileges.** This is enforced at the function level:
+
+```sql
+-- Non-superuser attempt:
+SELECT efm_extension.efm_cluster_status('text');
+-- ERROR: only superuser may execute EFM commands
+```
+
+## Testing
+
+Run regression tests:
+```bash
+make installcheck
+```
+
+All tests should pass on supported PostgreSQL versions (12-17).
+
+## Documentation
+
+- [Version Compatibility Matrix](docs/compatibility.md) - Detailed version support and migration guide
+- [Security Review](docs/security_review.md) - Security analysis and threat model
+- [Architecture Overview](docs/ARCHITECTURE.md) - Technical architecture documentation
+- [Gap Analysis](docs/GAP_ANALYSIS.md) - Missing features and improvements
+- [Implementation Plan](docs/IMPLEMENTATION_PLAN.md) - Roadmap for future enhancements
+
+## Contributing
+
+Please ensure all contributions:
+1. Pass regression tests
+2. Build with `-Werror` (no warnings)
+3. Follow security guidelines (see docs/security_review.md)
+4. Include tests for new functionality
+
+## License
+
+See LICENSE file for details.
+
+## Support
+
+For security issues, see [docs/security_review.md](docs/security_review.md) for reporting guidelines.
+
+For other issues, please use GitHub issues: https://github.com/vibhorkum/efm_extension/issues

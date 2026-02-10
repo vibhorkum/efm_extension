@@ -53,7 +53,8 @@ ORDER BY name;
  efm.command_path        |         |      | Define the command_path for efm
  efm.edb_sudo            |         |      | Define the sudo command for efm
  efm.properties_location |         |      | Define directory of efm properties file
-(4 rows)
+ efm.version             | 4       |      | EFM major version (4 or 5)
+(5 rows)
 
 -- Test 5: Check extension metadata
 SELECT extname, extversion, extrelocatable
