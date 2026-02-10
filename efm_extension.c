@@ -462,7 +462,7 @@ _PG_init(void)
                                     PGC_SUSET,
                                     0, NULL, NULL, NULL);
         DefineCustomStringVariable( "efm.properties_location",
-                                    "Define director of efm propeties file",
+                                    "Define directory of efm properties file",
                                     "It is undefined by default",
                                     &efm_properties_file_loc,
                                     NULL,

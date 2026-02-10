@@ -47,12 +47,12 @@ SELECT name, setting, unit, short_desc
 FROM pg_settings
 WHERE name LIKE 'efm.%'
 ORDER BY name;
-          name           | setting | unit |              short_desc               
--------------------------+---------+------+---------------------------------------
+          name           | setting | unit |               short_desc                
+-------------------------+---------+------+-----------------------------------------
  efm.cluster_name        |         |      | Define the cluster name for efm
  efm.command_path        |         |      | Define the command_path for efm
  efm.edb_sudo            |         |      | Define the sudo command for efm
- efm.properties_location |         |      | Define director of efm propeties file
+ efm.properties_location |         |      | Define directory of efm properties file
 (4 rows)
 
 -- Test 5: Check extension metadata
