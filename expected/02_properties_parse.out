@@ -15,13 +15,13 @@ SELECT
     line AS original
 FROM test_properties
 ORDER BY line;
-     name     |  value  |             original              
---------------+---------+-----------------------------------
- db.port      | 5432    | db.port=5432
- db.user      | efm     | db.user=efm
- empty.value  |         | empty.value=
- jvm.options  | -Xmx32m | jvm.options=-Xmx32m -Dfoo=bar
- script.env   | VAR1    | script.env=VAR1=value1 VAR2=value2
+    name     |     value     |              original              
+-------------+---------------+------------------------------------
+ db.port     | 5432          | db.port=5432
+ db.user     | efm           | db.user=efm
+ empty.value |               | empty.value=
+ jvm.options | -Xmx32m -Dfoo | jvm.options=-Xmx32m -Dfoo=bar
+ script.env  | VAR1          | script.env=VAR1=value1 VAR2=value2
 (5 rows)
 
 -- Test improved parsing with regexp
@@ -32,13 +32,13 @@ SELECT
 FROM test_properties
 WHERE line ~ '^[^=]+='
 ORDER BY line;
-     name     |           value            |             original              
---------------+----------------------------+-----------------------------------
- db.port      | 5432                       | db.port=5432
- db.user      | efm                        | db.user=efm
- empty.value  |                            | empty.value=
- jvm.options  | -Xmx32m -Dfoo=bar          | jvm.options=-Xmx32m -Dfoo=bar
- script.env   | VAR1=value1 VAR2=value2    | script.env=VAR1=value1 VAR2=value2
+    name     |          value          |              original              
+-------------+-------------------------+------------------------------------
+ db.port     | 5432                    | db.port=5432
+ db.user     | efm                     | db.user=efm
+ empty.value |                         | empty.value=
+ jvm.options | -Xmx32m -Dfoo=bar       | jvm.options=-Xmx32m -Dfoo=bar
+ script.env  | VAR1=value1 VAR2=value2 | script.env=VAR1=value1 VAR2=value2
 (5 rows)
 
 DROP TABLE test_properties;

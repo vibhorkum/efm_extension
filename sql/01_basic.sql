@@ -1,5 +1,8 @@
 -- Test basic extension functionality
--- Assumes extension is created as part of setup
+-- Create the extension first
+CREATE EXTENSION IF NOT EXISTS dblink;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION efm_extension;
 
 -- Test 1: Verify schema exists
 SELECT COUNT(*) AS schema_count 
@@ -36,4 +39,5 @@ SELECT typname AS type_name
 FROM pg_type t
   JOIN pg_namespace n ON t.typnamespace = n.oid
 WHERE n.nspname = 'efm_extension'
+  AND typname NOT LIKE '\_%' -- Exclude array types (start with _)
 ORDER BY typname;

@@ -1,5 +1,8 @@
 -- Test basic extension functionality
--- Assumes extension is created as part of setup
+-- Create the extension first
+CREATE EXTENSION IF NOT EXISTS dblink;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION efm_extension;
 -- Test 1: Verify schema exists
 SELECT COUNT(*) AS schema_count 
 FROM pg_namespace 
@@ -16,8 +19,8 @@ FROM pg_proc p
 WHERE n.nspname = 'efm_extension'
   AND proname LIKE 'efm_%'
 ORDER BY proname;
-      function_name       
---------------------------
+     function_name     
+-----------------------
  efm_allow_node
  efm_cluster_status
  efm_disallow_node
@@ -33,8 +36,8 @@ SELECT viewname AS view_name
 FROM pg_views
 WHERE schemaname = 'efm_extension'
 ORDER BY viewname;
-      view_name      
----------------------
+      view_name       
+----------------------
  efm_local_properties
  efm_nodes_details
 (2 rows)
@@ -44,8 +47,8 @@ SELECT name, setting, unit, short_desc
 FROM pg_settings
 WHERE name LIKE 'efm.%'
 ORDER BY name;
-          name           | setting | unit |            short_desc            
--------------------------+---------+------+----------------------------------
+          name           | setting | unit |              short_desc               
+-------------------------+---------+------+---------------------------------------
  efm.cluster_name        |         |      | Define the cluster name for efm
  efm.command_path        |         |      | Define the command_path for efm
  efm.edb_sudo            |         |      | Define the sudo command for efm
@@ -56,9 +59,9 @@ ORDER BY name;
 SELECT extname, extversion, extrelocatable
 FROM pg_extension
 WHERE extname = 'efm_extension';
-    extname     | extversion | extrelocatable 
-----------------+------------+----------------
- efm_extension  | 1.0        | f
+    extname    | extversion | extrelocatable 
+---------------+------------+----------------
+ efm_extension | 1.0        | f
 (1 row)
 
 -- Test 6: Verify types exist
@@ -66,10 +69,14 @@ SELECT typname AS type_name
 FROM pg_type t
   JOIN pg_namespace n ON t.typnamespace = n.oid
 WHERE n.nspname = 'efm_extension'
+  AND typname NOT LIKE '\_%' -- Exclude array types (start with _)
 ORDER BY typname;
-       type_name        
-------------------------
+      type_name       
+----------------------
+ efm_local_properties
+ efm_nodes_details
+ pgpool_nodes
  pool_link_status
  pool_status
-(2 rows)
+(5 rows)
 
