@@ -1,0 +1,30 @@
+# Build artifacts
+*.o
+*.so
+*.bc
+
+# Test results
+regression.diffs
+regression.out
+results/
+tmp_check/
+log/
+
+# Editor files
+*.swp
+*.swo
+*~
+.*.sw?
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# Compiled extension
+efm_extension.so
+
+# Temporary files
+/tmp/
+*.tmp

@@ -1,0 +1,31 @@
+-- Test properties parsing functionality
+-- This test demonstrates the bug with multi-= values
+
+-- Setup: Create a test view with properties containing = in values
+CREATE TEMP TABLE test_properties (line text);
+
+INSERT INTO test_properties VALUES
+  ('db.user=efm'),
+  ('db.port=5432'),
+  ('jvm.options=-Xmx32m -Dfoo=bar'),
+  ('script.env=VAR1=value1 VAR2=value2'),
+  ('empty.value=');
+
+-- Test current parsing (shows the bug)
+SELECT 
+    split_part(line, '=', 1) AS name,
+    split_part(line, '=', 2) AS value,
+    line AS original
+FROM test_properties
+ORDER BY line;
+
+-- Test improved parsing with regexp
+SELECT 
+    (regexp_match(line, '^([^=]+)=(.*)$'))[1] AS name,
+    (regexp_match(line, '^([^=]+)=(.*)$'))[2] AS value,
+    line AS original
+FROM test_properties
+WHERE line ~ '^[^=]+='
+ORDER BY line;
+
+DROP TABLE test_properties;

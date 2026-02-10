@@ -80,14 +80,12 @@ REVOKE ALL ON FUNCTION efm_list_properties() FROM PUBLIC;
 CREATE VIEW efm_local_properties
 AS
 SELECT
-    split_part(foo,
-        '=',
-        1) AS name,
-    split_part(foo,
-        '=',
-        2) AS VALUE
+    (regexp_match(foo, '^([^=]+)=(.*)$'))[1] AS name,
+    (regexp_match(foo, '^([^=]+)=(.*)$'))[2] AS VALUE
 FROM
-    efm_extension.efm_list_properties () foo;
+    efm_extension.efm_list_properties () foo
+WHERE
+    foo ~ '^[^=]+=';
 
 CREATE VIEW efm_nodes_details
 AS
