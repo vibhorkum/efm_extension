@@ -1,0 +1,55 @@
+# docker-compose.edb.yml - Test with real EFM using EDB subscription
+#
+# This compose file uses the real EDB Failover Manager instead of the mock.
+# Requires an EDB subscription token.
+#
+# Usage:
+#   # Set your subscription token
+#   export EDB_SUBSCRIPTION_TOKEN=your_token_here
+#
+#   # Build and start
+#   docker-compose -f docker-compose.edb.yml build
+#   docker-compose -f docker-compose.edb.yml up -d
+#
+#   # Run tests
+#   docker-compose -f docker-compose.edb.yml exec postgres /tests/run_all_tests.sh
+#
+#   # Stop and cleanup
+#   docker-compose -f docker-compose.edb.yml down -v
+
+version: '3.8'
+
+services:
+  postgres:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.edb
+      args:
+        EDB_SUBSCRIPTION_TOKEN: ${EDB_SUBSCRIPTION_TOKEN:?EDB_SUBSCRIPTION_TOKEN is required}
+        PG_VERSION: "${PG_VERSION:-16}"
+        EFM_VERSION: "${EFM_VERSION:-4.9}"
+    container_name: efm_extension_test_edb
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testdb
+      EFM_DB_PASSWORD: efm_password
+      EFM_CLUSTER_NAME: efm
+    ports:
+      - "5433:5432"
+      - "7809:7809"  # EFM admin port
+    volumes:
+      - postgres_edb_data:/var/lib/postgresql/data
+      - ./tests:/tests:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && sudo -u efm /usr/edb/efm-${EFM_VERSION:-4.9}/bin/efm cluster-status efm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  postgres_edb_data:
+
+networks:
+  default:
+    name: efm_extension_edb_test_net
