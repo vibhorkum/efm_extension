@@ -26,6 +26,8 @@
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "storage/ipc.h"
+#include "storage/shmem.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/inet.h"
@@ -78,7 +80,9 @@ static void require_superuser(void);
 static char *read_pipe_contents(int fd, Size *len);
 
 /* Previous shared_preload_libraries hooks */
+#if PG_VERSION_NUM >= 150000
 static shmem_request_hook_type prev_shmem_request_hook = NULL;
+#endif
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 /*
@@ -201,7 +205,7 @@ validate_cluster_name(const char *name)
 }
 
 /*
- * Read all contents from a pipe/file descriptor
+ * Read all contents from a pipe/file descriptor (blocking read)
  */
 static char *
 read_pipe_contents(int fd, Size *len)
@@ -212,9 +216,19 @@ read_pipe_contents(int fd, Size *len)
 
     initStringInfo(&buf);
 
-    while ((nread = read(fd, chunk, sizeof(chunk))) > 0)
+    /* Use blocking read - simpler and more reliable */
+    while ((nread = read(fd, chunk, sizeof(chunk))) != 0)
     {
-        appendBinaryStringInfo(&buf, chunk, nread);
+        if (nread > 0)
+        {
+            appendBinaryStringInfo(&buf, chunk, nread);
+        }
+        else if (nread < 0)
+        {
+            if (errno == EINTR)
+                continue;  /* Interrupted by signal, retry */
+            break;  /* Real error, stop reading */
+        }
     }
 
     if (len)
@@ -283,12 +297,32 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         char **argv;
         int argc = 0;
         int i;
+        sigset_t sigmask;
 
-        /* Reset signal handlers to default */
+        /*
+         * Reset signal handlers to default - PostgreSQL installs custom handlers
+         * that can interfere with child process execution
+         */
         signal(SIGTERM, SIG_DFL);
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         signal(SIGALRM, SIG_DFL);
+        signal(SIGHUP, SIG_DFL);
+        signal(SIGPIPE, SIG_DFL);
+        signal(SIGUSR1, SIG_DFL);
+        signal(SIGUSR2, SIG_DFL);
+        signal(SIGCHLD, SIG_DFL);
+
+        /* Unblock all signals - PostgreSQL may have blocked some */
+        sigemptyset(&sigmask);
+        sigprocmask(SIG_SETMASK, &sigmask, NULL);
+
+        /* Close all file descriptors except stdin, stdout, stderr and our pipes */
+        for (i = 3; i < 1024; i++)
+        {
+            if (i != stdout_pipe[1] && i != stderr_pipe[1])
+                close(i);
+        }
 
         /* Close read ends of pipes */
         close(stdout_pipe[0]);
@@ -301,12 +335,13 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         close(stderr_pipe[1]);
 
         /* Build argument array for execve */
-        /* Format: sudo -u efm /path/to/efm <cmd> <cluster> [args...] */
-        argv = malloc((6 + nargs + 1) * sizeof(char *));
+        /* Format: sudo -n -u efm /path/to/efm <cmd> <cluster> [args...] */
+        argv = malloc((7 + nargs + 1) * sizeof(char *));
         if (!argv)
             _exit(127);
 
         argv[argc++] = efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo";
+        argv[argc++] = "-n";  /* Non-interactive - don't prompt for password */
         argv[argc++] = "-u";
         argv[argc++] = efm_sudo_user ? efm_sudo_user : "efm";
         argv[argc++] = efm_path_command;
@@ -319,12 +354,20 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         argv[argc] = NULL;
 
         /*
-         * Execute command - use execvp which searches PATH and inherits
-         * minimal required environment for sudo to work
+         * Execute command with minimal environment for sudo to work
+         * We need PATH for sudo to find shells and HOME for some sudo configs
          */
-        execvp(efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo", argv);
+        {
+            char *envp[4];
+            envp[0] = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+            envp[1] = "HOME=/tmp";
+            envp[2] = "LANG=C";
+            envp[3] = NULL;
 
-        /* If execvp returns, it failed */
+            execve(efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo", argv, envp);
+        }
+
+        /* If execve returns, it failed */
         _exit(127);
     }
 
@@ -335,11 +378,11 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
     close(stdout_pipe[1]);
     close(stderr_pipe[1]);
 
-    /* Set pipes to non-blocking for timeout support */
-    fcntl(stdout_pipe[0], F_SETFL, O_NONBLOCK);
-    fcntl(stderr_pipe[0], F_SETFL, O_NONBLOCK);
-
-    /* Read output from child with timeout */
+    /*
+     * Read output from child using blocking reads.
+     * The child's stdout/stderr pipes will return EOF when the child closes them
+     * (either by exiting or by closing its end of the pipes).
+     */
     result->stdout_data = read_pipe_contents(stdout_pipe[0], &result->stdout_len);
     result->stderr_data = read_pipe_contents(stderr_pipe[0], &result->stderr_len);
 
@@ -1346,16 +1389,18 @@ done:
  */
 
 /*
- * Shared memory request hook
+ * Shared memory request hook (PG15+)
  */
+#if PG_VERSION_NUM >= 150000
 static void
 efm_shmem_request_hook(void)
 {
     if (prev_shmem_request_hook)
-        prev_shmem_request_hook();
+        (*prev_shmem_request_hook)();
 
     efm_shmem_request();
 }
+#endif
 
 /*
  * Shared memory startup hook
@@ -1364,7 +1409,7 @@ static void
 efm_shmem_startup_hook(void)
 {
     if (prev_shmem_startup_hook)
-        prev_shmem_startup_hook();
+        (*prev_shmem_startup_hook)();
 
     efm_shmem_startup();
 }
@@ -1524,8 +1569,14 @@ _PG_init(void)
     /* Set up shared memory hooks */
     if (process_shared_preload_libraries_in_progress)
     {
+#if PG_VERSION_NUM >= 150000
+        /* PG15+ has shmem_request_hook */
         prev_shmem_request_hook = shmem_request_hook;
         shmem_request_hook = efm_shmem_request_hook;
+#else
+        /* For PG14, request shared memory directly */
+        RequestAddinShmemSpace(efm_shmem_size());
+#endif
 
         prev_shmem_startup_hook = shmem_startup_hook;
         shmem_startup_hook = efm_shmem_startup_hook;

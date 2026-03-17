@@ -23,7 +23,7 @@ services:
       MOCK_EFM_MODE: normal
       MOCK_EFM_DELAY: "0"
     ports:
-      - "5433:5432"
+      - "5499:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./tests:/tests:ro

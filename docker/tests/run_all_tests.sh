@@ -7,7 +7,8 @@
 #   0 - All tests passed
 #   1 - One or more tests failed
 
-set -e
+# Don't exit on error - we handle errors in test functions
+set +e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PASS_COUNT=0
@@ -22,14 +23,14 @@ NC='\033[0m' # No Color
 
 log_pass() {
     echo -e "${GREEN}[PASS]${NC} $1"
-    ((PASS_COUNT++))
-    ((TOTAL_COUNT++))
+    PASS_COUNT=$((PASS_COUNT + 1))
+    TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
 
 log_fail() {
     echo -e "${RED}[FAIL]${NC} $1"
-    ((FAIL_COUNT++))
-    ((TOTAL_COUNT++))
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
 
 log_info() {
@@ -99,6 +100,8 @@ wait_for_postgres
 # Setup: Create extension
 log_info "Setting up test environment..."
 run_sql "DROP EXTENSION IF EXISTS efm_extension CASCADE;"
+run_sql "CREATE EXTENSION IF NOT EXISTS dblink;"
+run_sql "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
 run_sql "CREATE EXTENSION efm_extension;"
 
 echo ""
