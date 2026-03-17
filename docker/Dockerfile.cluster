@@ -1,7 +1,8 @@
-# Dockerfile.edb - Build with real EFM using EDB subscription
+# Dockerfile.cluster - Multi-node PostgreSQL + EFM cluster
 #
-# This Dockerfile installs the actual EDB Failover Manager using your
-# EDB subscription credentials. Use this for integration testing with real EFM.
+# This Dockerfile creates an image that can be used for both primary
+# and standby nodes in a PostgreSQL streaming replication cluster
+# managed by EDB Failover Manager.
 #
 # Build arguments (required):
 #   EDB_SUBSCRIPTION_TOKEN - Your EDB subscription token
@@ -9,16 +10,9 @@
 # Optional build arguments:
 #   PG_VERSION - PostgreSQL major version (default: 16)
 #   EFM_VERSION - EFM version to install (default: 4.9)
-#
-# Usage:
-#   docker build -f Dockerfile.edb \
-#     --build-arg EDB_SUBSCRIPTION_TOKEN=your_token_here \
-#     --build-arg PG_VERSION=16 \
-#     --build-arg EFM_VERSION=4.9 \
-#     -t efm_extension_test:edb .
 
 ARG PG_VERSION=16
-FROM postgres:${PG_VERSION}
+FROM postgres:${PG_VERSION}-bookworm
 
 # Build arguments
 ARG EDB_SUBSCRIPTION_TOKEN
@@ -28,7 +22,6 @@ ARG PG_VERSION=16
 # Validate subscription token is provided
 RUN if [ -z "$EDB_SUBSCRIPTION_TOKEN" ]; then \
         echo "ERROR: EDB_SUBSCRIPTION_TOKEN build argument is required"; \
-        echo "Usage: docker build --build-arg EDB_SUBSCRIPTION_TOKEN=your_token ..."; \
         exit 1; \
     fi
 
@@ -41,6 +34,11 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     sudo \
     default-jre-headless \
+    iputils-ping \
+    net-tools \
+    dnsutils \
+    netcat-openbsd \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup EDB repository with subscription token
@@ -54,9 +52,16 @@ RUN apt-get update && apt-get install -y \
 # Create efm user if it doesn't exist
 RUN id -u efm &>/dev/null || useradd -m -s /bin/bash efm
 
+# Add postgres user to efm group and vice versa for permissions
+RUN usermod -aG efm postgres || true
+RUN usermod -aG postgres efm || true
+
 # Setup sudo permissions for postgres user to run EFM commands
 RUN echo "postgres ALL=(efm) NOPASSWD: /usr/edb/efm-${EFM_VERSION}/bin/efm" > /etc/sudoers.d/efm_postgres \
     && chmod 440 /etc/sudoers.d/efm_postgres
+
+# Allow efm user to manage PostgreSQL
+RUN echo "efm ALL=(postgres) NOPASSWD: ALL" >> /etc/sudoers.d/efm_postgres
 
 # Copy extension source and build
 WORKDIR /build/efm_extension
@@ -65,14 +70,26 @@ RUN make clean && make && make install
 
 # Create EFM configuration directory
 RUN mkdir -p /etc/edb/efm-${EFM_VERSION} \
-    && chown efm:efm /etc/edb/efm-${EFM_VERSION}
+    && chown -R efm:efm /etc/edb/efm-${EFM_VERSION} \
+    && chmod 755 /etc/edb/efm-${EFM_VERSION}
 
-# Copy test configuration template
-COPY docker/efm.properties.template /etc/edb/efm-${EFM_VERSION}/efm.properties.template
+# Create EFM log directory
+RUN mkdir -p /var/log/efm-${EFM_VERSION} \
+    && chown -R efm:efm /var/log/efm-${EFM_VERSION} \
+    && chmod 755 /var/log/efm-${EFM_VERSION}
 
-# Copy initialization script
-COPY docker/init-efm.sh /docker-entrypoint-initdb.d/99-init-efm.sh
-RUN chmod +x /docker-entrypoint-initdb.d/99-init-efm.sh
+# Create EFM run directory
+RUN mkdir -p /var/run/efm-${EFM_VERSION} \
+    && chown -R efm:efm /var/run/efm-${EFM_VERSION} \
+    && chmod 755 /var/run/efm-${EFM_VERSION}
+
+# Copy cluster initialization scripts
+COPY docker/cluster/init-primary.sh /usr/local/bin/init-primary.sh
+COPY docker/cluster/init-standby.sh /usr/local/bin/init-standby.sh
+COPY docker/cluster/configure-efm.sh /usr/local/bin/configure-efm.sh
+COPY docker/cluster/start-efm.sh /usr/local/bin/start-efm.sh
+COPY docker/cluster/entrypoint-cluster.sh /usr/local/bin/entrypoint-cluster.sh
+RUN chmod +x /usr/local/bin/*.sh
 
 # Copy test scripts
 COPY docker/tests/ /tests/
@@ -80,16 +97,12 @@ RUN chmod +x /tests/*.sh
 
 # Set EFM version for runtime scripts
 ENV EFM_VERSION=${EFM_VERSION}
+ENV PG_MAJOR=${PG_MAJOR}
 
-# Configure PostgreSQL
-RUN echo "shared_preload_libraries = 'efm_extension'" >> /usr/share/postgresql/postgresql.conf.sample \
-    && echo "efm.cluster_name = 'efm'" >> /usr/share/postgresql/postgresql.conf.sample \
-    && echo "efm.command_path = '/usr/edb/efm-${EFM_VERSION}/bin/efm'" >> /usr/share/postgresql/postgresql.conf.sample \
-    && echo "efm.properties_location = '/etc/edb/efm-${EFM_VERSION}'" >> /usr/share/postgresql/postgresql.conf.sample \
-    && echo "efm.cache_ttl = 5" >> /usr/share/postgresql/postgresql.conf.sample
+# Create password file for efm
+RUN touch /etc/edb/efm-${EFM_VERSION}/.efmpass \
+    && chown efm:efm /etc/edb/efm-${EFM_VERSION}/.efmpass \
+    && chmod 600 /etc/edb/efm-${EFM_VERSION}/.efmpass
 
-# Health check
-HEALTHCHECK --interval=5s --timeout=5s --start-period=30s \
-    CMD pg_isready -U postgres && /usr/edb/efm-${EFM_VERSION}/bin/efm cluster-status efm || exit 1
-
+ENTRYPOINT ["/usr/local/bin/entrypoint-cluster.sh"]
 CMD ["postgres"]
