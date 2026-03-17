@@ -203,7 +203,7 @@ efm_update_cache(const char *json_data, Size len)
  * Invalidate the cache (force refresh on next access)
  */
 void
-efm_invalidate_cache(void)
+efm_cache_invalidate(void)
 {
     if (efm_cache == NULL)
         return;

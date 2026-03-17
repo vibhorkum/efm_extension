@@ -237,6 +237,22 @@ COMMENT ON FUNCTION efm_extension.efm_invalidate_cache() IS
 
 REVOKE ALL ON FUNCTION efm_extension.efm_invalidate_cache() FROM PUBLIC;
 
+-- Check if EFM is available (safe to call even when EFM is down)
+CREATE FUNCTION efm_extension.efm_is_available()
+    RETURNS TABLE (
+        is_available    boolean,
+        error_code      integer,
+        error_message   text
+    )
+    LANGUAGE C VOLATILE STRICT
+    SECURITY DEFINER
+AS 'MODULE_PATHNAME', 'efm_is_available';
+
+COMMENT ON FUNCTION efm_extension.efm_is_available() IS
+    'Check if EFM is available and responding. Safe to call even when EFM is down - will not crash PostgreSQL.';
+
+REVOKE ALL ON FUNCTION efm_extension.efm_is_available() FROM PUBLIC;
+
 -- ============================================================================
 -- Views
 -- ============================================================================

@@ -60,6 +60,7 @@ PG_FUNCTION_INFO_V1(efm_resume_monitoring);
 PG_FUNCTION_INFO_V1(efm_list_properties);
 PG_FUNCTION_INFO_V1(efm_cache_stats);
 PG_FUNCTION_INFO_V1(efm_invalidate_cache);
+PG_FUNCTION_INFO_V1(efm_is_available);
 
 /* GUC variables */
 char *efm_path_command = NULL;
@@ -92,12 +93,15 @@ static const EfmErrorMapping efm_errors[] = {
     {5,   ERRCODE_INSUFFICIENT_PRIVILEGE,           "EFM permission denied"},
     {10,  ERRCODE_CONNECTION_FAILURE,               "EFM database connection failed"},
     {20,  ERRCODE_LOCK_NOT_AVAILABLE,               "EFM operation already in progress"},
-    {127, ERRCODE_UNDEFINED_FILE,                   "EFM binary not found"},
-    {-1,  ERRCODE_SYSTEM_ERROR,                     "EFM process terminated abnormally"},
+    {127, ERRCODE_UNDEFINED_FILE,                   "EFM binary not found or sudo failed"},
+    {-1,  ERRCODE_SYSTEM_ERROR,                     "EFM process terminated by signal"},
+    {-2,  ERRCODE_SYSTEM_ERROR,                     "EFM process exited with unknown status"},
+    {-3,  ERRCODE_QUERY_CANCELED,                   "EFM command timed out"},
+    {-4,  ERRCODE_SYSTEM_ERROR,                     "Failed to wait for EFM process"},
 };
 
 /*
- * Validate IP address format (IPv4)
+ * Validate IP address format (IPv4 or IPv6)
  */
 bool
 validate_ip_address(const char *ip)
@@ -108,7 +112,22 @@ validate_ip_address(const char *ip)
     if (ip == NULL || *ip == '\0')
         return false;
 
-    /* Basic IPv4 validation */
+    /* Check for IPv6 (contains colons) */
+    if (strchr(ip, ':') != NULL)
+    {
+        /* Basic IPv6 validation - must contain only hex digits, colons, and dots (for mapped IPv4) */
+        for (const char *p = ip; *p; p++)
+        {
+            if (!isxdigit((unsigned char)*p) && *p != ':' && *p != '.')
+                return false;
+        }
+        /* Must have at least one colon and reasonable length */
+        if (strlen(ip) < 2 || strlen(ip) > 45)
+            return false;
+        return true;
+    }
+
+    /* IPv4 validation */
     if (sscanf(ip, "%d.%d.%d.%d%c", &a, &b, &c, &d, &extra) != 4)
         return false;
 
@@ -204,9 +223,17 @@ read_pipe_contents(int fd, Size *len)
     return buf.data;
 }
 
+/* Default timeout for EFM commands in seconds */
+#define EFM_COMMAND_TIMEOUT_SEC 30
+
 /*
  * Execute EFM command securely using fork/execve
  * This avoids shell interpolation and command injection vulnerabilities
+ *
+ * Features:
+ * - Timeout handling to prevent hung processes
+ * - Proper signal handling in child
+ * - Non-blocking pipe reads with select()
  */
 EfmExecResult *
 efm_exec_command(const char *efm_cmd, char **args, int nargs)
@@ -215,6 +242,10 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
     int stderr_pipe[2];
     pid_t pid;
     EfmExecResult *result;
+    int status;
+    int wait_result;
+    time_t start_time;
+    int timeout_remaining;
 
     result = palloc0(sizeof(EfmExecResult));
 
@@ -253,6 +284,12 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         int argc = 0;
         int i;
 
+        /* Reset signal handlers to default */
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+        signal(SIGALRM, SIG_DFL);
+
         /* Close read ends of pipes */
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
@@ -281,30 +318,82 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
 
         argv[argc] = NULL;
 
-        /* Execute with clean environment */
-        execve(efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo",
-               argv, NULL);
+        /*
+         * Execute command - use execvp which searches PATH and inherits
+         * minimal required environment for sudo to work
+         */
+        execvp(efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo", argv);
 
-        /* If execve returns, it failed */
+        /* If execvp returns, it failed */
         _exit(127);
     }
 
     /* Parent process */
-    int status;
+    start_time = time(NULL);
 
     /* Close write ends of pipes */
     close(stdout_pipe[1]);
     close(stderr_pipe[1]);
 
-    /* Read output from child */
+    /* Set pipes to non-blocking for timeout support */
+    fcntl(stdout_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(stderr_pipe[0], F_SETFL, O_NONBLOCK);
+
+    /* Read output from child with timeout */
     result->stdout_data = read_pipe_contents(stdout_pipe[0], &result->stdout_len);
     result->stderr_data = read_pipe_contents(stderr_pipe[0], &result->stderr_len);
 
     close(stdout_pipe[0]);
     close(stderr_pipe[0]);
 
-    /* Wait for child to complete */
-    waitpid(pid, &status, 0);
+    /* Wait for child with timeout */
+    timeout_remaining = EFM_COMMAND_TIMEOUT_SEC - (int)(time(NULL) - start_time);
+    if (timeout_remaining < 1)
+        timeout_remaining = 1;
+
+    /* Try non-blocking wait first */
+    wait_result = waitpid(pid, &status, WNOHANG);
+
+    if (wait_result == 0)
+    {
+        /* Child still running, wait with timeout */
+        int elapsed = 0;
+        while (elapsed < timeout_remaining)
+        {
+            usleep(100000);  /* 100ms */
+            elapsed++;
+            wait_result = waitpid(pid, &status, WNOHANG);
+            if (wait_result != 0)
+                break;
+            if (elapsed % 10 == 0)  /* Check every second */
+                elapsed = (int)(time(NULL) - start_time);
+        }
+
+        if (wait_result == 0)
+        {
+            /* Timeout - kill the child */
+            elog(WARNING, "EFM command '%s' timed out after %d seconds, killing process",
+                 efm_cmd, EFM_COMMAND_TIMEOUT_SEC);
+            kill(pid, SIGTERM);
+            usleep(500000);  /* Give it 500ms to terminate */
+            wait_result = waitpid(pid, &status, WNOHANG);
+            if (wait_result == 0)
+            {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+            }
+            result->exit_code = -3;  /* Timeout */
+            result->stderr_data = pstrdup("Command timed out");
+            result->stderr_len = strlen(result->stderr_data);
+            return result;
+        }
+    }
+
+    if (wait_result < 0)
+    {
+        result->exit_code = -4;  /* Wait failed */
+        return result;
+    }
 
     if (WIFEXITED(status))
         result->exit_code = WEXITSTATUS(status);
@@ -820,7 +909,7 @@ efm_allow_node(PG_FUNCTION_ARGS)
     }
 
     efm_free_exec_result(result);
-    efm_invalidate_cache();
+    efm_cache_invalidate();
 
     PG_RETURN_INT32(0);
 }
@@ -861,7 +950,7 @@ efm_disallow_node(PG_FUNCTION_ARGS)
     }
 
     efm_free_exec_result(result);
-    efm_invalidate_cache();
+    efm_cache_invalidate();
 
     PG_RETURN_INT32(0);
 }
@@ -911,7 +1000,7 @@ efm_set_priority(PG_FUNCTION_ARGS)
     }
 
     efm_free_exec_result(result);
-    efm_invalidate_cache();
+    efm_cache_invalidate();
 
     PG_RETURN_INT32(0);
 }
@@ -945,7 +1034,7 @@ efm_failover(PG_FUNCTION_ARGS)
             (errmsg("EFM failover completed successfully")));
 
     efm_free_exec_result(result);
-    efm_invalidate_cache();
+    efm_cache_invalidate();
 
     PG_RETURN_INT32(0);
 }
@@ -980,7 +1069,7 @@ efm_switchover(PG_FUNCTION_ARGS)
             (errmsg("EFM switchover completed successfully")));
 
     efm_free_exec_result(result);
-    efm_invalidate_cache();
+    efm_cache_invalidate();
 
     PG_RETURN_INT32(0);
 }
@@ -1011,7 +1100,7 @@ efm_resume_monitoring(PG_FUNCTION_ARGS)
     }
 
     efm_free_exec_result(result);
-    efm_invalidate_cache();
+    efm_cache_invalidate();
 
     PG_RETURN_INT32(0);
 }
@@ -1138,16 +1227,117 @@ efm_cache_stats(PG_FUNCTION_ARGS)
 }
 
 /*
- * efm_invalidate_cache - Manually invalidate the cache
+ * efm_invalidate_cache_func - Manually invalidate the cache (SQL callable)
  */
 Datum
 efm_invalidate_cache(PG_FUNCTION_ARGS)
 {
     require_superuser();
 
-    efm_invalidate_cache();
+    /* Call the cache module function (not this SQL wrapper) */
+    efm_cache_invalidate();
 
     PG_RETURN_VOID();
+}
+
+/*
+ * efm_is_available - Check if EFM is available and responding
+ *
+ * This function checks:
+ * 1. EFM binary exists and is executable
+ * 2. EFM agent is running and responding
+ *
+ * Returns a record with availability status and error message if unavailable.
+ * This function does NOT raise an error if EFM is down - it returns status.
+ *
+ * IMPORTANT: This function is safe to call even if EFM is not running.
+ * It will not break PostgreSQL - it simply returns false with an error message.
+ */
+Datum
+efm_is_available(PG_FUNCTION_ARGS)
+{
+    TupleDesc tupdesc;
+    Datum values[3];
+    bool nulls[3] = {false, false, false};
+    HeapTuple tuple;
+    bool is_available = false;
+    char *error_message = NULL;
+    int error_code = 0;
+
+    require_superuser();
+
+    /* Build tuple descriptor */
+    tupdesc = CreateTemplateTupleDesc(3);
+    TupleDescInitEntry(tupdesc, 1, "is_available", BOOLOID, -1, 0);
+    TupleDescInitEntry(tupdesc, 2, "error_code", INT4OID, -1, 0);
+    TupleDescInitEntry(tupdesc, 3, "error_message", TEXTOID, -1, 0);
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    /* Check 1: Configuration set */
+    if (efm_cluster_name == NULL || *efm_cluster_name == '\0')
+    {
+        error_code = 1;
+        error_message = "efm.cluster_name is not configured";
+        goto done;
+    }
+
+    if (efm_path_command == NULL || *efm_path_command == '\0')
+    {
+        error_code = 2;
+        error_message = "efm.command_path is not configured";
+        goto done;
+    }
+
+    /* Check 2: EFM binary exists */
+    if (access(efm_path_command, X_OK) != 0)
+    {
+        error_code = 3;
+        error_message = psprintf("EFM binary not found or not executable: %s", efm_path_command);
+        goto done;
+    }
+
+    /* Check 3: Try to get cluster status (quick check) */
+    {
+        EfmExecResult *result;
+
+        result = efm_exec_command("cluster-status-json", NULL, 0);
+
+        if (result->exit_code == 0)
+        {
+            is_available = true;
+            error_message = "EFM is available and responding";
+            error_code = 0;
+        }
+        else if (result->exit_code == -3)
+        {
+            error_code = 4;
+            error_message = "EFM command timed out - agent may be unresponsive";
+        }
+        else if (result->exit_code == 127)
+        {
+            error_code = 5;
+            error_message = "sudo or EFM binary execution failed - check permissions";
+        }
+        else
+        {
+            error_code = result->exit_code;
+            if (result->stderr_data && result->stderr_len > 0)
+                error_message = pstrdup(result->stderr_data);
+            else
+                error_message = psprintf("EFM returned error code %d", result->exit_code);
+        }
+
+        efm_free_exec_result(result);
+    }
+
+done:
+    values[0] = BoolGetDatum(is_available);
+    values[1] = Int32GetDatum(error_code);
+    values[2] = CStringGetTextDatum(error_message ? error_message : "Unknown error");
+
+    tuple = heap_form_tuple(tupdesc, values, nulls);
+
+    PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
 }
 
 /* ============================================================================

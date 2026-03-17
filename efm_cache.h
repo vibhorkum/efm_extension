@@ -34,7 +34,7 @@ extern Size efm_shmem_size(void);
 extern bool efm_cache_valid(void);
 extern char *efm_get_cached_status(void);
 extern void efm_update_cache(const char *json_data, Size len);
-extern void efm_invalidate_cache(void);
+extern void efm_cache_invalidate(void);
 extern EfmCacheStats efm_get_cache_stats(void);
 
 /* GUC variable for cache TTL */
