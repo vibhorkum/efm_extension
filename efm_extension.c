@@ -1389,12 +1389,21 @@ efm_resume_monitoring(PG_FUNCTION_ARGS)
 /*
  * Check if a property key is sensitive and should be redacted
  * Sensitive keys include passwords, licenses, and other secrets
+ *
+ * Uses prefix matching to catch variants like:
+ * - db.password=xxx
+ * - db.password.encrypted=xxx
+ * - db.password.foo=xxx
  */
 static bool
 is_sensitive_property(const char *line)
 {
-    /* List of sensitive property prefixes/patterns to redact */
-    static const char *sensitive_patterns[] = {
+    /*
+     * List of sensitive property PREFIXES to redact.
+     * Any property starting with these prefixes followed by '=' or '.'
+     * will be redacted (e.g., db.password, db.password.encrypted).
+     */
+    static const char *sensitive_prefixes[] = {
         "db.password",
         "db.service.password",
         "jdbc.password",
@@ -1406,11 +1415,11 @@ is_sensitive_property(const char *line)
         NULL
     };
 
-    for (int i = 0; sensitive_patterns[i] != NULL; i++)
+    for (int i = 0; sensitive_prefixes[i] != NULL; i++)
     {
-        size_t pattern_len = strlen(sensitive_patterns[i]);
-        if (strncmp(line, sensitive_patterns[i], pattern_len) == 0 &&
-            (line[pattern_len] == '=' || line[pattern_len] == '\0'))
+        size_t prefix_len = strlen(sensitive_prefixes[i]);
+        if (strncmp(line, sensitive_prefixes[i], prefix_len) == 0 &&
+            (line[prefix_len] == '=' || line[prefix_len] == '.' || line[prefix_len] == '\0'))
             return true;
     }
     return false;

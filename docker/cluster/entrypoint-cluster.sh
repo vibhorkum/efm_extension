@@ -102,15 +102,33 @@ EOF
         # Start PostgreSQL temporarily to create users
         gosu postgres pg_ctl -D "$PGDATA" -o "-c listen_addresses=''" -w start
 
-        # Create replication user
-        gosu postgres psql -v ON_ERROR_STOP=1 --username postgres << EOSQL
-CREATE USER ${REPLICATION_USER} WITH REPLICATION ENCRYPTED PASSWORD '${REPLICATION_PASSWORD}';
-CREATE USER efm WITH SUPERUSER ENCRYPTED PASSWORD '${EFM_DB_PASSWORD:-efm_pass}';
-CREATE DATABASE testdb;
+        # Create replication user with proper escaping using psql variables and format()
+        # This prevents SQL injection if passwords contain special characters
+        gosu postgres psql -v ON_ERROR_STOP=1 --username postgres \
+            -v repl_user="$REPLICATION_USER" \
+            -v repl_pass="$REPLICATION_PASSWORD" \
+            -v efm_pass="${EFM_DB_PASSWORD:-efm_pass}" <<'EOSQL'
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'repl_user') THEN
+        EXECUTE format('CREATE USER %I WITH REPLICATION ENCRYPTED PASSWORD %L',
+                      :'repl_user', :'repl_pass');
+    END IF;
+END
+$$;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'efm') THEN
+        EXECUTE format('CREATE USER efm WITH SUPERUSER ENCRYPTED PASSWORD %L',
+                      :'efm_pass');
+    END IF;
+END
+$$;
+SELECT 'CREATE DATABASE testdb' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'testdb')\gexec
 \c testdb
 CREATE EXTENSION IF NOT EXISTS dblink;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE EXTENSION efm_extension;
+CREATE EXTENSION IF NOT EXISTS efm_extension;
 EOSQL
 
         # Stop PostgreSQL

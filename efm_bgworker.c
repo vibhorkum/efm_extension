@@ -96,7 +96,7 @@ efm_persist_status(const char *json_data)
 
         ret = SPI_execute_with_args(
             "INSERT INTO efm_extension.efm_status_history "
-            "(status_json, collected_at) VALUES ($1::jsonb, now()) "
+            "(status_json, collected_at) VALUES ($1::jsonb, pg_catalog.now()) "
             "ON CONFLICT DO NOTHING",
             1,
             argtypes,
@@ -164,7 +164,7 @@ efm_cleanup_history(void)
 
         ret = SPI_execute(
             "DELETE FROM efm_extension.efm_status_history "
-            "WHERE collected_at < now() - interval '7 days'",
+            "WHERE collected_at < pg_catalog.now() - interval '7 days'",
             false, 0);
 
         if (ret != SPI_OK_DELETE)
