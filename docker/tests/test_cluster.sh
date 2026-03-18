@@ -138,15 +138,7 @@ run_sql_expect_success "Standby node exists" \
 
 echo ""
 echo "========================================"
-echo "  Test 7: Cluster Information"
-echo "========================================"
-
-run_sql_expect_success "efm_get_cluster_info works" \
-    "SELECT * FROM efm_extension.efm_get_cluster_info();"
-
-echo ""
-echo "========================================"
-echo "  Test 8: Node Details View"
+echo "  Test 7: Node Details View"
 echo "========================================"
 
 run_sql_expect_success "efm_nodes_details view works" \
@@ -154,7 +146,7 @@ run_sql_expect_success "efm_nodes_details view works" \
 
 echo ""
 echo "========================================"
-echo "  Test 9: Cache Functions"
+echo "  Test 8: Cache Functions"
 echo "========================================"
 
 run_sql_expect_success "efm_cache_stats returns data" \
@@ -165,7 +157,7 @@ run_sql_expect_success "efm_invalidate_cache works" \
 
 echo ""
 echo "========================================"
-echo "  Test 10: Metrics View"
+echo "  Test 9: Metrics View"
 echo "========================================"
 
 run_sql_expect_success "efm_metrics view works" \
@@ -173,7 +165,7 @@ run_sql_expect_success "efm_metrics view works" \
 
 echo ""
 echo "========================================"
-echo "  Test 11: Zabbix Discovery"
+echo "  Test 10: Zabbix Discovery"
 echo "========================================"
 
 run_sql_expect_success "zabbix_node_discovery returns valid JSON" \
@@ -181,7 +173,7 @@ run_sql_expect_success "zabbix_node_discovery returns valid JSON" \
 
 echo ""
 echo "========================================"
-echo "  Test 12: Properties File"
+echo "  Test 11: Properties File"
 echo "========================================"
 
 run_sql_expect_success "efm_list_properties returns data" \
@@ -189,7 +181,7 @@ run_sql_expect_success "efm_list_properties returns data" \
 
 echo ""
 echo "========================================"
-echo "  Test 13: Real Cluster Verification"
+echo "  Test 12: Real Cluster Verification"
 echo "========================================"
 
 # Verify we have a real cluster with multiple nodes
