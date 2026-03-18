@@ -256,6 +256,7 @@ SELECT * FROM efm_extension.efm_local_properties;
 | `efm.bgw_interval` | integer | `10` | BGW polling interval (seconds) |
 | `efm.bgw_database` | string | `postgres` | Database for BGW connection |
 | `efm.bgw_persist_history` | boolean | `false` | Persist status to history table |
+| `efm.debug` | boolean | `false` | Log exact EFM commands to server log |
 
 ## Security Considerations
 

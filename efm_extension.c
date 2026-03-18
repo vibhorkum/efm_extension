@@ -74,6 +74,7 @@ char *efm_sudo_user = NULL;
 char *efm_cluster_name = NULL;
 char *efm_properties_file_loc = NULL;
 char *efm_encryption_key = NULL;
+bool efm_debug = false;
 
 /* Internal function declarations */
 void _PG_init(void);
@@ -450,6 +451,32 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         ereport(ERROR,
                 (errcode(ERRCODE_SYSTEM_ERROR),
                  errmsg("failed to create stderr pipe: %m")));
+    }
+
+    /*
+     * Debug logging: show the exact command being executed.
+     * This helps troubleshoot sudo/EFM configuration issues.
+     */
+    if (efm_debug)
+    {
+        StringInfoData cmd_str;
+        int i;
+
+        initStringInfo(&cmd_str);
+        appendStringInfo(&cmd_str, "%s -n -u %s %s %s %s",
+                         efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo",
+                         efm_sudo_user ? efm_sudo_user : "efm",
+                         efm_path_command,
+                         efm_cmd,
+                         efm_cluster_name);
+
+        for (i = 0; i < nargs; i++)
+            appendStringInfo(&cmd_str, " %s", args[i]);
+
+        ereport(LOG,
+                (errmsg("EFM command: %s", cmd_str.data)));
+
+        pfree(cmd_str.data);
     }
 
     pid = fork();
@@ -2034,6 +2061,16 @@ _PG_init(void)
                                PGC_SUSET,
                                GUC_SUPERUSER_ONLY,
                                NULL, NULL, NULL);
+
+    DefineCustomBoolVariable("efm.debug",
+                             "Log EFM commands to server log",
+                             "When enabled, logs the exact command line before execution. "
+                             "Useful for troubleshooting sudo/EFM configuration issues.",
+                             &efm_debug,
+                             false,
+                             PGC_SUSET,
+                             0,
+                             NULL, NULL, NULL);
 
 #if PG_VERSION_NUM >= 150000
     MarkGUCPrefixReserved("efm");
