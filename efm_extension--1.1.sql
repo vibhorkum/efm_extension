@@ -352,6 +352,7 @@ CREATE FUNCTION efm_extension.zabbix_node_discovery()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 SELECT jsonb_build_object(
     'data',
@@ -403,6 +404,7 @@ CREATE FUNCTION efm_extension.cleanup_status_history(retention_days integer DEFA
 RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     deleted_count bigint;
@@ -443,6 +445,7 @@ CREATE FUNCTION efm_extension.encrypt_efm(plaintext text, key text)
 RETURNS bytea
 LANGUAGE sql STRICT
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
     SELECT encrypt(plaintext::bytea, key::bytea, 'aes');
 $$;
@@ -454,6 +457,7 @@ CREATE FUNCTION efm_extension.get_efm(ciphertext bytea, key text)
 RETURNS text
 LANGUAGE sql STRICT
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
     SELECT convert_from(decrypt(ciphertext, key::bytea, 'aes'), 'SQL_ASCII');
 $$;
@@ -475,6 +479,7 @@ CREATE FUNCTION efm_extension.get_pgpool_links()
 RETURNS SETOF efm_extension.pool_link_status
 LANGUAGE sql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
     SELECT
         'pgpool_' || hostname AS link_name,
@@ -500,6 +505,7 @@ CREATE FUNCTION efm_extension.pgpool_backendpid_details(
 RETURNS SETOF efm_extension.pool_status
 LANGUAGE sql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
     SELECT *
     FROM dblink(conn_name, 'SHOW pool_pools') AS foo (
@@ -532,6 +538,7 @@ CREATE FUNCTION efm_extension.add_pgpool_monitoring(
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 BEGIN
     INSERT INTO efm_extension.pgpool_nodes
@@ -554,6 +561,7 @@ CREATE FUNCTION efm_extension.remove_pgpool_monitoring(
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 BEGIN
     DELETE FROM efm_extension.pgpool_nodes
@@ -572,6 +580,7 @@ CREATE FUNCTION efm_extension.pg_is_in_recovery()
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     recovery_status boolean := false;
@@ -631,6 +640,7 @@ CREATE FUNCTION efm_extension.grant_access_to_user(username text)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     rec RECORD;
@@ -685,6 +695,7 @@ CREATE FUNCTION efm_extension.revoke_access_from_user(username text)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     rec RECORD;

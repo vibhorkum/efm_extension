@@ -39,8 +39,9 @@ typedef struct EfmNode
     char        db_status[32];
     char        xlog[32];
     char        xlog_info[256];
-    int         priority;
+    int         priority;           /* -1 means not set/available */
     bool        is_promotable;
+    bool        promotable_set;     /* true if is_promotable was parsed from JSON */
 } EfmNode;
 
 /* Array of nodes */

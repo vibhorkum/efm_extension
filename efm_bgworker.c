@@ -231,13 +231,11 @@ efm_bgworker_main(Datum main_arg)
         PG_TRY();
         {
             EfmExecResult *result;
-            char *args[1];
-
-            args[0] = efm_cluster_name;
 
             pgstat_report_activity(STATE_RUNNING, "polling EFM status");
 
-            result = efm_exec_command("cluster-status-json", args, 1);
+            /* Note: efm_exec_command already appends efm_cluster_name internally */
+            result = efm_exec_command("cluster-status-json", NULL, 0);
 
             if (result->exit_code == 0 && result->stdout_data)
             {

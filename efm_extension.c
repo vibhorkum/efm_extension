@@ -39,6 +39,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <regex.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -52,7 +53,6 @@ PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(efm_cluster_status);
 PG_FUNCTION_INFO_V1(efm_cluster_status_json);
 PG_FUNCTION_INFO_V1(efm_get_nodes);
-PG_FUNCTION_INFO_V1(efm_get_cluster_info);
 PG_FUNCTION_INFO_V1(efm_allow_node);
 PG_FUNCTION_INFO_V1(efm_disallow_node);
 PG_FUNCTION_INFO_V1(efm_set_priority);
@@ -205,30 +205,72 @@ validate_cluster_name(const char *name)
 }
 
 /*
- * Read all contents from a pipe/file descriptor (blocking read)
+ * Read from a non-blocking file descriptor with timeout
+ * Returns data read, sets *len to length. Returns NULL on error.
  */
 static char *
-read_pipe_contents(int fd, Size *len)
+read_pipe_with_timeout(int fd, Size *len, int timeout_ms)
 {
     StringInfoData buf;
     char chunk[4096];
-    ssize_t nread;
+    struct pollfd pfd;
+    int remaining_ms = timeout_ms;
+    time_t start_time = time(NULL);
 
     initStringInfo(&buf);
 
-    /* Use blocking read - simpler and more reliable */
-    while ((nread = read(fd, chunk, sizeof(chunk))) != 0)
+    /* Set non-blocking */
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
+    while (remaining_ms > 0)
     {
-        if (nread > 0)
-        {
-            appendBinaryStringInfo(&buf, chunk, nread);
-        }
-        else if (nread < 0)
+        int poll_result = poll(&pfd, 1, remaining_ms > 1000 ? 1000 : remaining_ms);
+
+        if (poll_result < 0)
         {
             if (errno == EINTR)
-                continue;  /* Interrupted by signal, retry */
-            break;  /* Real error, stop reading */
+            {
+                /* Update remaining time and continue */
+                remaining_ms = timeout_ms - (int)((time(NULL) - start_time) * 1000);
+                continue;
+            }
+            break;  /* Real error */
         }
+        else if (poll_result == 0)
+        {
+            /* Timeout on this poll, update remaining time */
+            remaining_ms = timeout_ms - (int)((time(NULL) - start_time) * 1000);
+            continue;
+        }
+
+        /* Data available or EOF/error */
+        if (pfd.revents & (POLLIN | POLLHUP))
+        {
+            ssize_t nread = read(fd, chunk, sizeof(chunk));
+            if (nread > 0)
+            {
+                appendBinaryStringInfo(&buf, chunk, nread);
+            }
+            else if (nread == 0)
+            {
+                /* EOF - pipe closed */
+                break;
+            }
+            else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            {
+                /* Real error */
+                break;
+            }
+        }
+
+        if (pfd.revents & (POLLERR | POLLNVAL))
+            break;
+
+        /* Update remaining time */
+        remaining_ms = timeout_ms - (int)((time(NULL) - start_time) * 1000);
     }
 
     if (len)
@@ -379,17 +421,24 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
     close(stderr_pipe[1]);
 
     /*
-     * Read output from child using blocking reads.
-     * The child's stdout/stderr pipes will return EOF when the child closes them
-     * (either by exiting or by closing its end of the pipes).
+     * Read output from child using poll-based non-blocking reads with timeout.
+     * This ensures we don't block indefinitely if the child hangs.
      */
-    result->stdout_data = read_pipe_contents(stdout_pipe[0], &result->stdout_len);
-    result->stderr_data = read_pipe_contents(stderr_pipe[0], &result->stderr_len);
+    {
+        int timeout_ms = EFM_COMMAND_TIMEOUT_SEC * 1000;
+        result->stdout_data = read_pipe_with_timeout(stdout_pipe[0], &result->stdout_len, timeout_ms);
+
+        /* Recalculate remaining timeout for stderr */
+        timeout_remaining = EFM_COMMAND_TIMEOUT_SEC - (int)(time(NULL) - start_time);
+        if (timeout_remaining < 1)
+            timeout_remaining = 1;
+        result->stderr_data = read_pipe_with_timeout(stderr_pipe[0], &result->stderr_len, timeout_remaining * 1000);
+    }
 
     close(stdout_pipe[0]);
     close(stderr_pipe[0]);
 
-    /* Wait for child with timeout */
+    /* Wait for child with remaining timeout */
     timeout_remaining = EFM_COMMAND_TIMEOUT_SEC - (int)(time(NULL) - start_time);
     if (timeout_remaining < 1)
         timeout_remaining = 1;
@@ -426,6 +475,8 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
                 waitpid(pid, &status, 0);
             }
             result->exit_code = -3;  /* Timeout */
+            if (result->stderr_data)
+                pfree(result->stderr_data);
             result->stderr_data = pstrdup("Command timed out");
             result->stderr_len = strlen(result->stderr_data);
             return result;
@@ -465,7 +516,8 @@ efm_free_exec_result(EfmExecResult *result)
 }
 
 /*
- * Check EFM result and raise appropriate error if needed
+ * Check EFM result and raise appropriate error if needed.
+ * This function takes ownership of the result and frees it before raising error.
  */
 void
 efm_check_result(EfmExecResult *result, const char *operation)
@@ -474,14 +526,24 @@ efm_check_result(EfmExecResult *result, const char *operation)
     const char *msg = "Unknown EFM error";
     int elevel;
     int i;
+    int exit_code;
+    char *stderr_copy = NULL;
 
     if (result->exit_code == 0)
         return;
 
+    /* Save values we need for error message */
+    exit_code = result->exit_code;
+    if (result->stderr_data && result->stderr_len > 0)
+        stderr_copy = pstrdup(result->stderr_data);
+
+    /* Free the result before raising error to avoid memory leak */
+    efm_free_exec_result(result);
+
     /* Find matching error */
     for (i = 0; i < sizeof(efm_errors) / sizeof(efm_errors[0]); i++)
     {
-        if (efm_errors[i].exit_code == result->exit_code)
+        if (efm_errors[i].exit_code == exit_code)
         {
             pg_errcode = efm_errors[i].pg_errcode;
             msg = efm_errors[i].message;
@@ -491,20 +553,14 @@ efm_check_result(EfmExecResult *result, const char *operation)
 
     /* Determine severity based on operation */
     elevel = ERROR;
-    if (strcmp(operation, "promote") == 0 ||
-        strcmp(operation, "switchover") == 0)
-    {
-        /* Critical operations - use ERROR but provide detailed info */
-        elevel = ERROR;
-    }
 
     ereport(elevel,
             (errcode(pg_errcode),
-             errmsg("%s failed: %s (exit code %d)", operation, msg, result->exit_code),
-             errdetail("stderr: %s",
-                       result->stderr_data && result->stderr_len > 0 ?
-                       result->stderr_data : "(empty)"),
+             errmsg("%s failed: %s (exit code %d)", operation, msg, exit_code),
+             errdetail("stderr: %s", stderr_copy ? stderr_copy : "(empty)"),
              errhint("Check EFM logs at /var/log/efm-*/efm.log for details")));
+
+    /* Note: stderr_copy will be freed by PostgreSQL memory context cleanup after error */
 }
 
 /*
@@ -599,6 +655,11 @@ parse_efm_nodes(const char *json_data)
                                            sizeof(EfmNode) * nodes->capacity);
                 }
 
+                /* Initialize the new node */
+                memset(&nodes->items[nodes->count], 0, sizeof(EfmNode));
+                nodes->items[nodes->count].priority = -1;  /* -1 = not set */
+                nodes->items[nodes->count].promotable_set = false;
+
                 strncpy(nodes->items[nodes->count].ip, current_ip,
                        sizeof(nodes->items[nodes->count].ip) - 1);
                 nodes->count++;
@@ -633,6 +694,15 @@ parse_efm_nodes(const char *json_data)
                             strncpy(node->xlog, val, sizeof(node->xlog) - 1);
                         else if (strcmp(key, "xloginfo") == 0)
                             strncpy(node->xlog_info, val, sizeof(node->xlog_info) - 1);
+                        else if (strcmp(key, "priority") == 0)
+                        {
+                            node->priority = atoi(val);
+                        }
+                        else if (strcmp(key, "promotable") == 0)
+                        {
+                            node->is_promotable = (strcmp(val, "true") == 0);
+                            node->promotable_set = true;
+                        }
                     }
                 }
             }
@@ -896,11 +966,17 @@ efm_get_nodes(PG_FUNCTION_ARGS)
         else
             nulls[5] = true;
 
-        /* priority */
-        values[6] = Int32GetDatum(node->priority);
+        /* priority (-1 means not available) */
+        if (node->priority >= 0)
+            values[6] = Int32GetDatum(node->priority);
+        else
+            nulls[6] = true;
 
-        /* is_promotable */
-        values[7] = BoolGetDatum(node->is_promotable);
+        /* is_promotable (only set if parsed from JSON) */
+        if (node->promotable_set)
+            values[7] = BoolGetDatum(node->is_promotable);
+        else
+            nulls[7] = true;
 
         /* last_updated */
         values[8] = TimestampTzGetDatum(GetCurrentTimestamp());
@@ -945,10 +1021,9 @@ efm_allow_node(PG_FUNCTION_ARGS)
 
     if (result->exit_code != 0)
     {
-        int exit_code = result->exit_code;
+        /* efm_check_result takes ownership and frees result before raising ERROR */
         efm_check_result(result, "allow-node");
-        efm_free_exec_result(result);
-        PG_RETURN_INT32(exit_code);
+        /* Not reached - efm_check_result raises ERROR */
     }
 
     efm_free_exec_result(result);
@@ -986,10 +1061,9 @@ efm_disallow_node(PG_FUNCTION_ARGS)
 
     if (result->exit_code != 0)
     {
-        int exit_code = result->exit_code;
+        /* efm_check_result takes ownership and frees result before raising ERROR */
         efm_check_result(result, "disallow-node");
-        efm_free_exec_result(result);
-        PG_RETURN_INT32(exit_code);
+        /* Not reached - efm_check_result raises ERROR */
     }
 
     efm_free_exec_result(result);
@@ -1036,10 +1110,9 @@ efm_set_priority(PG_FUNCTION_ARGS)
 
     if (result->exit_code != 0)
     {
-        int exit_code = result->exit_code;
+        /* efm_check_result takes ownership and frees result before raising ERROR */
         efm_check_result(result, "set-priority");
-        efm_free_exec_result(result);
-        PG_RETURN_INT32(exit_code);
+        /* Not reached - efm_check_result raises ERROR */
     }
 
     efm_free_exec_result(result);
@@ -1067,10 +1140,9 @@ efm_failover(PG_FUNCTION_ARGS)
 
     if (result->exit_code != 0)
     {
-        int exit_code = result->exit_code;
+        /* efm_check_result takes ownership and frees result before raising ERROR */
         efm_check_result(result, "promote");
-        efm_free_exec_result(result);
-        PG_RETURN_INT32(exit_code);
+        /* Not reached - efm_check_result raises ERROR */
     }
 
     ereport(LOG,
@@ -1102,10 +1174,9 @@ efm_switchover(PG_FUNCTION_ARGS)
 
     if (result->exit_code != 0)
     {
-        int exit_code = result->exit_code;
+        /* efm_check_result takes ownership and frees result before raising ERROR */
         efm_check_result(result, "switchover");
-        efm_free_exec_result(result);
-        PG_RETURN_INT32(exit_code);
+        /* Not reached - efm_check_result raises ERROR */
     }
 
     ereport(LOG,
@@ -1136,10 +1207,9 @@ efm_resume_monitoring(PG_FUNCTION_ARGS)
 
     if (result->exit_code != 0)
     {
-        int exit_code = result->exit_code;
+        /* efm_check_result takes ownership and frees result before raising ERROR */
         efm_check_result(result, "resume");
-        efm_free_exec_result(result);
-        PG_RETURN_INT32(exit_code);
+        /* Not reached - efm_check_result raises ERROR */
     }
 
     efm_free_exec_result(result);
