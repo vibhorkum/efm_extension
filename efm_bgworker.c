@@ -71,7 +71,6 @@ static void
 efm_persist_status(const char *json_data)
 {
     int ret;
-    bool isnull;
     Oid argtypes[1] = { TEXTOID };
     Datum values[1];
 

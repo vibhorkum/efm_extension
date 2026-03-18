@@ -77,7 +77,6 @@ void _PG_fini(void);
 
 static void efm_check_config(void);
 static void require_superuser(void);
-static char *read_pipe_contents(int fd, Size *len);
 
 /* Previous shared_preload_libraries hooks */
 #if PG_VERSION_NUM >= 150000
