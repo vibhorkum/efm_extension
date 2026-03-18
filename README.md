@@ -11,7 +11,7 @@ A PostgreSQL extension (version 14+) to manage EDB Failover Manager (EFM) cluste
 - **Caching**: Shared memory cache to reduce shell call latency
 - **Background Worker**: Optional periodic polling with history persistence
 - **Observability**: Prometheus/Grafana/Zabbix compatible metrics views
-- **Error Handling**: Maps EFM exit codes to PostgreSQL error levels with stderr capture
+- **Error Handling**: Maps EFM exit codes to PostgreSQL SQLSTATE codes with stderr capture
 
 ## Functions and Views
 
