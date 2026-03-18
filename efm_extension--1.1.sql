@@ -449,25 +449,27 @@ COMMENT ON TABLE efm_extension.pgpool_nodes IS
 REVOKE ALL ON TABLE efm_extension.pgpool_nodes FROM PUBLIC;
 
 -- Encryption helper
+-- Note: pgcrypto's encrypt() is typically installed in public schema
 CREATE FUNCTION efm_extension.encrypt_efm(plaintext text, key text)
 RETURNS bytea
 LANGUAGE sql STRICT
 SECURITY DEFINER
 SET search_path = pg_catalog, efm_extension
 AS $$
-    SELECT encrypt(plaintext::bytea, key::bytea, 'aes');
+    SELECT public.encrypt(plaintext::bytea, key::bytea, 'aes');
 $$;
 
 REVOKE ALL ON FUNCTION efm_extension.encrypt_efm(text, text) FROM PUBLIC;
 
 -- Decryption helper
+-- Note: pgcrypto's decrypt() is typically installed in public schema
 CREATE FUNCTION efm_extension.get_efm(ciphertext bytea, key text)
 RETURNS text
 LANGUAGE sql STRICT
 SECURITY DEFINER
 SET search_path = pg_catalog, efm_extension
 AS $$
-    SELECT convert_from(decrypt(ciphertext, key::bytea, 'aes'), 'SQL_ASCII');
+    SELECT pg_catalog.convert_from(public.decrypt(ciphertext, key::bytea, 'aes'), 'SQL_ASCII');
 $$;
 
 REVOKE ALL ON FUNCTION efm_extension.get_efm(bytea, text) FROM PUBLIC;
