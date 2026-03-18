@@ -1525,7 +1525,9 @@ efm_list_properties(PG_FUNCTION_ARGS)
     {
         char *properties_path;
         FILE *fp;
-        char line[1024];
+        char *line = NULL;
+        size_t line_alloc = 0;
+        ssize_t line_len;
         List *lines = NIL;
 
         funcctx = SRF_FIRSTCALL_INIT();
@@ -1551,15 +1553,19 @@ efm_list_properties(PG_FUNCTION_ARGS)
                      errmsg("cannot open properties file: %s", properties_path),
                      errdetail("%m")));
 
-        while (fgets(line, sizeof(line), fp) != NULL)
+        /*
+         * Use getline() to read complete logical lines regardless of length.
+         * This ensures sensitive property lines are processed atomically,
+         * preventing partial redaction bypass from buffer splitting.
+         */
+        while ((line_len = getline(&line, &line_alloc, fp)) != -1)
         {
-            size_t len = strlen(line);
             char *output_line;
             char *trimmed;
 
             /* Trim trailing newline */
-            while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
-                line[--len] = '\0';
+            while (line_len > 0 && (line[line_len-1] == '\n' || line[line_len-1] == '\r'))
+                line[--line_len] = '\0';
 
             /* Skip leading whitespace for processing */
             trimmed = line;
@@ -1596,6 +1602,8 @@ efm_list_properties(PG_FUNCTION_ARGS)
             lines = lappend(lines, output_line);
         }
 
+        /* Free getline's allocated buffer */
+        free(line);
         fclose(fp);
         pfree(properties_path);
 
