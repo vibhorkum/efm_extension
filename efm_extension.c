@@ -1546,37 +1546,42 @@ efm_list_properties(PG_FUNCTION_ARGS)
         {
             size_t len = strlen(line);
             char *output_line;
-
-            /* Skip comments and empty lines */
-            if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
-                continue;
+            char *trimmed;
 
             /* Trim trailing newline */
             while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
                 line[--len] = '\0';
 
-            /* Skip if empty after trimming */
-            if (len == 0)
+            /* Skip leading whitespace for processing */
+            trimmed = line;
+            while (*trimmed && (*trimmed == ' ' || *trimmed == '\t'))
+                trimmed++;
+
+            /* Skip comments and empty lines */
+            if (*trimmed == '#' || *trimmed == '\0')
                 continue;
 
-            /* Redact sensitive properties */
-            if (is_sensitive_property(line))
+            /* Redact sensitive properties (check trimmed version for prefix match) */
+            if (is_sensitive_property(trimmed))
             {
-                char *eq = strchr(line, '=');
+                char *eq = strchr(trimmed, '=');
                 if (eq != NULL)
                 {
-                    /* Output key with redacted value */
-                    *eq = '\0';
-                    output_line = psprintf("%s=********", line);
+                    /* Output key with redacted value, preserving leading whitespace */
+                    size_t key_len = eq - trimmed;
+                    size_t ws_len = trimmed - line;
+                    output_line = psprintf("%.*s%.*s=********",
+                                          (int)ws_len, line,
+                                          (int)key_len, trimmed);
                 }
                 else
                 {
-                    output_line = pstrdup(line);
+                    output_line = pstrdup(trimmed);
                 }
             }
             else
             {
-                output_line = pstrdup(line);
+                output_line = pstrdup(trimmed);
             }
 
             lines = lappend(lines, output_line);
@@ -1756,21 +1761,27 @@ efm_is_available(PG_FUNCTION_ARGS)
     }
     PG_CATCH();
     {
-        /* Convert internal execution errors to status result */
+        /*
+         * Convert internal execution errors to status result.
+         * CopyErrorData() must be called in TopMemoryContext, but we must
+         * switch back BEFORE allocating error_message to avoid memory bloat
+         * in TopMemoryContext when this function is called repeatedly.
+         */
         ErrorData *edata;
         MemoryContext oldcxt;
+        char *msg_copy;
 
-        /* Save error info before clearing - switch to TopMemoryContext temporarily */
         oldcxt = MemoryContextSwitchTo(TopMemoryContext);
         edata = CopyErrorData();
         FlushErrorState();
-
-        error_code = 6;
-        error_message = psprintf("Internal error during EFM check: %s", edata->message);
-        FreeErrorData(edata);
-
-        /* Restore previous memory context to avoid memory bloat */
         MemoryContextSwitchTo(oldcxt);
+
+        /* Now allocate error_message in the function's memory context */
+        error_code = 6;
+        msg_copy = pstrdup(edata->message);  /* Copy before freeing edata */
+        error_message = psprintf("Internal error during EFM check: %s", msg_copy);
+        pfree(msg_copy);
+        FreeErrorData(edata);
     }
     PG_END_TRY();
 
