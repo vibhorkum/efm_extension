@@ -110,21 +110,41 @@ static const EfmErrorMapping efm_errors[] = {
 /*
  * Check if an IPv4 address has leading zeros in any octet
  * Returns true if leading zeros are found (invalid)
+ *
+ * A leading zero is only invalid if the octet has more than one digit
+ * and starts with '0'. For example:
+ *   - "01.0.0.1" is invalid (01 has leading zero)
+ *   - "0.0.0.1" is valid (single digit zero is fine)
+ *   - "100.0.0.1" is valid (100 doesn't start with 0)
  */
 static bool
 ipv4_has_leading_zeros(const char *ip)
 {
     const char *p = ip;
+    const char *octet_start;
 
     while (*p)
     {
-        /* Check for leading zero: either "0X" where X is a digit, or at start */
-        if (*p == '0' && isdigit((unsigned char)p[1]))
-            return true;
+        /* Mark start of current octet */
+        octet_start = p;
 
-        /* Skip to next octet */
+        /* Find end of octet (next '.' or end of string) */
         while (*p && *p != '.')
             p++;
+
+        /*
+         * Check for leading zero: octet length > 1 and starts with '0'
+         * This correctly handles:
+         *   "0" -> length 1, OK
+         *   "00" -> length 2, starts with '0', INVALID
+         *   "01" -> length 2, starts with '0', INVALID
+         *   "10" -> length 2, starts with '1', OK
+         *   "100" -> length 3, starts with '1', OK
+         */
+        if ((p - octet_start) > 1 && *octet_start == '0')
+            return true;
+
+        /* Advance past the dot if present */
         if (*p == '.')
             p++;
     }
