@@ -857,12 +857,16 @@ parse_efm_nodes(const char *json_data)
             if (strcmp(key, "nodes") == 0)
             {
                 in_nodes = true;
-                nodes_nesting_level = current_nesting;  /* Remember the nesting level */
+                /*
+                 * The next token will be WJB_BEGIN_OBJECT which increments
+                 * current_nesting, so we need to track that level (+1).
+                 */
+                nodes_nesting_level = current_nesting + 1;
             }
             else if (in_nodes && validate_ip_address(key))
             {
                 /* This is a node IP */
-                strncpy(current_ip, key, sizeof(current_ip) - 1);
+                strlcpy(current_ip, key, sizeof(current_ip));
 
                 /* Expand array if needed */
                 if (nodes->count >= nodes->capacity)
@@ -877,8 +881,8 @@ parse_efm_nodes(const char *json_data)
                 nodes->items[nodes->count].priority = -1;  /* -1 = not set */
                 nodes->items[nodes->count].promotable_set = false;
 
-                strncpy(nodes->items[nodes->count].ip, current_ip,
-                       sizeof(nodes->items[nodes->count].ip) - 1);
+                strlcpy(nodes->items[nodes->count].ip, current_ip,
+                        sizeof(nodes->items[nodes->count].ip));
                 nodes->count++;
             }
             else if (in_nodes && current_ip[0] != '\0')
@@ -910,15 +914,15 @@ parse_efm_nodes(const char *json_data)
                     if (val)
                     {
                         if (strcmp(key, "type") == 0)
-                            strncpy(node->type, val, sizeof(node->type) - 1);
+                            strlcpy(node->type, val, sizeof(node->type));
                         else if (strcmp(key, "agent") == 0)
-                            strncpy(node->agent_status, val, sizeof(node->agent_status) - 1);
+                            strlcpy(node->agent_status, val, sizeof(node->agent_status));
                         else if (strcmp(key, "db") == 0)
-                            strncpy(node->db_status, val, sizeof(node->db_status) - 1);
+                            strlcpy(node->db_status, val, sizeof(node->db_status));
                         else if (strcmp(key, "xlog") == 0)
-                            strncpy(node->xlog, val, sizeof(node->xlog) - 1);
+                            strlcpy(node->xlog, val, sizeof(node->xlog));
                         else if (strcmp(key, "xloginfo") == 0)
-                            strncpy(node->xlog_info, val, sizeof(node->xlog_info) - 1);
+                            strlcpy(node->xlog_info, val, sizeof(node->xlog_info));
                         else if (strcmp(key, "priority") == 0)
                         {
                             /* Use strtol for safe parsing with error checking */
