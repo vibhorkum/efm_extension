@@ -635,7 +635,9 @@ REVOKE ALL ON FUNCTION efm_extension.pg_last_wal_replay_lsn() FROM PUBLIC;
 -- Access Control Functions
 -- ============================================================================
 
--- Grant access to a user
+-- Grant monitoring access to a user (read-only functions and views)
+-- This function grants access to monitoring/observability functions only,
+-- NOT to management functions like failover, switchover, allow_node, etc.
 CREATE FUNCTION efm_extension.grant_access_to_user(username text)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -645,6 +647,17 @@ AS $$
 DECLARE
     rec RECORD;
     sql_cmd text;
+    -- Management functions that require superuser and should NOT be granted
+    management_funcs text[] := ARRAY[
+        'efm_allow_node',
+        'efm_disallow_node',
+        'efm_set_priority',
+        'efm_failover',
+        'efm_switchover',
+        'efm_resume_monitoring',
+        'grant_access_to_user',
+        'revoke_access_from_user'
+    ];
 BEGIN
     -- Validate username (prevent SQL injection)
     IF username !~ '^[a-zA-Z_][a-zA-Z0-9_]*$' THEN
@@ -654,7 +667,8 @@ BEGIN
     -- Grant schema usage
     EXECUTE format('GRANT USAGE ON SCHEMA efm_extension TO %I', username);
 
-    -- Grant access to all functions and views
+    -- Grant access to monitoring functions and views only
+    -- Exclude management functions that could perform privileged operations
     FOR rec IN
         SELECT
             CASE
@@ -662,7 +676,8 @@ BEGIN
                     'GRANT EXECUTE ON ' || extn_objects
                 WHEN extn_objects ~* '^view' THEN
                     'GRANT SELECT ON ' || regexp_replace(extn_objects, '^view ', '')
-            END AS grant_cmd
+            END AS grant_cmd,
+            extn_objects
         FROM (
             SELECT pg_catalog.pg_describe_object(classid, objid, 0) AS extn_objects
             FROM pg_catalog.pg_depend
@@ -672,8 +687,15 @@ BEGIN
         ) foo
         WHERE extn_objects ~* '^(view|function)'
     LOOP
+        -- Skip management functions
         IF rec.grant_cmd IS NOT NULL THEN
-            EXECUTE format('%s TO %I', rec.grant_cmd, username);
+            -- Check if this is a management function we should skip
+            IF NOT EXISTS (
+                SELECT 1 FROM unnest(management_funcs) AS mf
+                WHERE rec.extn_objects ~* mf
+            ) THEN
+                EXECUTE format('%s TO %I', rec.grant_cmd, username);
+            END IF;
         END IF;
     END LOOP;
 
@@ -686,7 +708,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION efm_extension.grant_access_to_user(text) IS
-    'Grant access to all EFM extension objects to the specified user';
+    'Grant monitoring access to EFM extension (read-only functions and views). '
+    'Management functions (failover, switchover, etc.) are NOT granted and require superuser.';
 
 REVOKE ALL ON FUNCTION efm_extension.grant_access_to_user(text) FROM PUBLIC;
 

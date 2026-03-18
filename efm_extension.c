@@ -42,7 +42,9 @@
 #include <poll.h>
 #include <regex.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifdef PG_MODULE_MAGIC
@@ -359,10 +361,18 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         sigprocmask(SIG_SETMASK, &sigmask, NULL);
 
         /* Close all file descriptors except stdin, stdout, stderr and our pipes */
-        for (i = 3; i < 1024; i++)
         {
-            if (i != stdout_pipe[1] && i != stderr_pipe[1])
-                close(i);
+            struct rlimit rl;
+            int max_fd = 1024;  /* fallback if getrlimit fails */
+
+            if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+                max_fd = (int) rl.rlim_cur;
+
+            for (i = 3; i < max_fd; i++)
+            {
+                if (i != stdout_pipe[1] && i != stderr_pipe[1])
+                    close(i);
+            }
         }
 
         /* Close read ends of pipes */
@@ -597,11 +607,14 @@ efm_check_config(void)
 
 /*
  * Require superuser privileges
+ * Note: We check the session user, not the current user, because these
+ * functions may be SECURITY DEFINER. This ensures the actual invoker
+ * must be a superuser, not just the function owner.
  */
 static void
 require_superuser(void)
 {
-    if (!superuser())
+    if (!superuser_arg(GetSessionUserId()))
         ereport(ERROR,
                 (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
                  errmsg("permission denied"),
@@ -673,11 +686,19 @@ parse_efm_nodes(const char *json_data)
                 if (type == WJB_VALUE)
                 {
                     char *val = NULL;
+                    bool val_allocated = false;
+
                     if (v.type == jbvString)
+                    {
                         val = pnstrdup(v.val.string.val, v.val.string.len);
+                        val_allocated = true;
+                    }
                     else if (v.type == jbvNumeric)
+                    {
                         val = DatumGetCString(DirectFunctionCall1(numeric_out,
                                               NumericGetDatum(v.val.numeric)));
+                        val_allocated = true;
+                    }
                     else if (v.type == jbvBool)
                         val = v.val.boolean ? "true" : "false";
 
@@ -702,6 +723,10 @@ parse_efm_nodes(const char *json_data)
                             node->is_promotable = (strcmp(val, "true") == 0);
                             node->promotable_set = true;
                         }
+
+                        /* Free allocated memory to prevent leaks */
+                        if (val_allocated)
+                            pfree(val);
                     }
                 }
             }
@@ -1013,7 +1038,7 @@ efm_allow_node(PG_FUNCTION_ARGS)
 
     ereport(LOG,
             (errmsg("EFM allow-node executed by %s for IP %s",
-                    GetUserNameFromId(GetUserId(), false), ip)));
+                    GetUserNameFromId(GetSessionUserId(), false), ip)));
 
     args[0] = ip;
     result = efm_exec_command("allow-node", args, 1);
@@ -1053,7 +1078,7 @@ efm_disallow_node(PG_FUNCTION_ARGS)
 
     ereport(LOG,
             (errmsg("EFM disallow-node executed by %s for IP %s",
-                    GetUserNameFromId(GetUserId(), false), ip)));
+                    GetUserNameFromId(GetSessionUserId(), false), ip)));
 
     args[0] = ip;
     result = efm_exec_command("disallow-node", args, 1);
@@ -1101,7 +1126,7 @@ efm_set_priority(PG_FUNCTION_ARGS)
 
     ereport(LOG,
             (errmsg("EFM set-priority executed by %s: IP=%s, priority=%s",
-                    GetUserNameFromId(GetUserId(), false), ip, priority)));
+                    GetUserNameFromId(GetSessionUserId(), false), ip, priority)));
 
     args[0] = ip;
     args[1] = priority;
@@ -1133,7 +1158,7 @@ efm_failover(PG_FUNCTION_ARGS)
 
     ereport(LOG,
             (errmsg("EFM failover (promote) initiated by %s",
-                    GetUserNameFromId(GetUserId(), false))));
+                    GetUserNameFromId(GetSessionUserId(), false))));
 
     result = efm_exec_command("promote", NULL, 0);
 
@@ -1167,7 +1192,7 @@ efm_switchover(PG_FUNCTION_ARGS)
 
     ereport(LOG,
             (errmsg("EFM switchover initiated by %s",
-                    GetUserNameFromId(GetUserId(), false))));
+                    GetUserNameFromId(GetSessionUserId(), false))));
 
     result = efm_exec_command("promote", args, 1);
 
@@ -1200,7 +1225,7 @@ efm_resume_monitoring(PG_FUNCTION_ARGS)
 
     ereport(LOG,
             (errmsg("EFM resume monitoring executed by %s",
-                    GetUserNameFromId(GetUserId(), false))));
+                    GetUserNameFromId(GetSessionUserId(), false))));
 
     result = efm_exec_command("resume", NULL, 0);
 

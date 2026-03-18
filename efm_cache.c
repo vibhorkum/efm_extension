@@ -58,7 +58,7 @@ efm_shmem_request(void)
     if (process_shared_preload_libraries_in_progress)
     {
         RequestAddinShmemSpace(efm_shmem_size());
-        RequestNamedLWLockTranche("efm_extension", 1);
+        /* We use an embedded LWLock in the cache struct, no need for named tranche */
     }
 #endif
 }
@@ -81,10 +81,14 @@ efm_shmem_startup(void)
     {
         /* First time - initialize the cache */
         memset(efm_cache, 0, sizeof(EfmStatusCache));
-        LWLockInitialize(&efm_cache->lock,
-                         LWLockNewTrancheId());
-        LWLockRegisterTranche(efm_cache->lock.tranche,
-                              "efm_extension");
+
+        /*
+         * Initialize an embedded LWLock with a dynamically allocated tranche ID.
+         * This is the standard approach for extension-owned locks.
+         */
+        LWLockInitialize(&efm_cache->lock, LWLockNewTrancheId());
+        LWLockRegisterTranche(efm_cache->lock.tranche, "efm_extension");
+
         efm_cache->last_update = 0;
         efm_cache->hits = 0;
         efm_cache->misses = 0;
