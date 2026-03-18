@@ -475,11 +475,12 @@ $$;
 REVOKE ALL ON FUNCTION efm_extension.pgpool_link_exists(text) FROM PUBLIC;
 
 -- Get pgpool connection links
+-- Note: includes 'public' in search_path for dblink functions (typically installed there)
 CREATE FUNCTION efm_extension.get_pgpool_links()
 RETURNS SETOF efm_extension.pool_link_status
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, efm_extension
+SET search_path = pg_catalog, efm_extension, public
 AS $$
 DECLARE
     rec RECORD;
@@ -510,6 +511,7 @@ $$;
 REVOKE ALL ON FUNCTION efm_extension.get_pgpool_links() FROM PUBLIC;
 
 -- Get pgpool backend PID details
+-- Note: includes 'public' in search_path for dblink functions (typically installed there)
 CREATE FUNCTION efm_extension.pgpool_backendpid_details(
     conn_name text,
     backend_pid integer
@@ -517,7 +519,7 @@ CREATE FUNCTION efm_extension.pgpool_backendpid_details(
 RETURNS SETOF efm_extension.pool_status
 LANGUAGE sql
 SECURITY DEFINER
-SET search_path = pg_catalog, efm_extension
+SET search_path = pg_catalog, efm_extension, public
 AS $$
     SELECT *
     FROM dblink(conn_name, 'SHOW pool_pools') AS foo (
@@ -609,11 +611,12 @@ $$;
 REVOKE ALL ON FUNCTION efm_extension.remove_pgpool_monitoring(text, integer, text) FROM PUBLIC;
 
 -- Check if connected via pgpool (for determining recovery status)
+-- Note: includes 'public' in search_path for dblink functions (typically installed there)
 CREATE FUNCTION efm_extension.pg_is_in_recovery()
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, efm_extension
+SET search_path = pg_catalog, efm_extension, public
 AS $$
 DECLARE
     recovery_status boolean := false;

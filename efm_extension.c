@@ -1335,7 +1335,38 @@ efm_resume_monitoring(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Check if a property key is sensitive and should be redacted
+ * Sensitive keys include passwords, licenses, and other secrets
+ */
+static bool
+is_sensitive_property(const char *line)
+{
+    /* List of sensitive property prefixes/patterns to redact */
+    static const char *sensitive_patterns[] = {
+        "db.password",
+        "db.service.password",
+        "jdbc.password",
+        "efm.license",
+        "script.notification.password",
+        "email.password",
+        "smtp.password",
+        "stable.conn.password",
+        NULL
+    };
+
+    for (int i = 0; sensitive_patterns[i] != NULL; i++)
+    {
+        size_t pattern_len = strlen(sensitive_patterns[i]);
+        if (strncmp(line, sensitive_patterns[i], pattern_len) == 0 &&
+            (line[pattern_len] == '=' || line[pattern_len] == '\0'))
+            return true;
+    }
+    return false;
+}
+
+/*
  * efm_list_properties - List EFM properties from config file
+ * Sensitive properties (passwords, licenses) are redacted for security
  */
 Datum
 efm_list_properties(PG_FUNCTION_ARGS)
@@ -1376,6 +1407,7 @@ efm_list_properties(PG_FUNCTION_ARGS)
         while (fgets(line, sizeof(line), fp) != NULL)
         {
             size_t len = strlen(line);
+            char *output_line;
 
             /* Skip comments and empty lines */
             if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
@@ -1389,7 +1421,27 @@ efm_list_properties(PG_FUNCTION_ARGS)
             if (len == 0)
                 continue;
 
-            lines = lappend(lines, pstrdup(line));
+            /* Redact sensitive properties */
+            if (is_sensitive_property(line))
+            {
+                char *eq = strchr(line, '=');
+                if (eq != NULL)
+                {
+                    /* Output key with redacted value */
+                    *eq = '\0';
+                    output_line = psprintf("%s=********", line);
+                }
+                else
+                {
+                    output_line = pstrdup(line);
+                }
+            }
+            else
+            {
+                output_line = pstrdup(line);
+            }
+
+            lines = lappend(lines, output_line);
         }
 
         fclose(fp);
@@ -1568,15 +1620,19 @@ efm_is_available(PG_FUNCTION_ARGS)
     {
         /* Convert internal execution errors to status result */
         ErrorData *edata;
+        MemoryContext oldcxt;
 
-        /* Save error info before clearing */
-        MemoryContextSwitchTo(TopMemoryContext);
+        /* Save error info before clearing - switch to TopMemoryContext temporarily */
+        oldcxt = MemoryContextSwitchTo(TopMemoryContext);
         edata = CopyErrorData();
         FlushErrorState();
 
         error_code = 6;
         error_message = psprintf("Internal error during EFM check: %s", edata->message);
         FreeErrorData(edata);
+
+        /* Restore previous memory context to avoid memory bloat */
+        MemoryContextSwitchTo(oldcxt);
     }
     PG_END_TRY();
 

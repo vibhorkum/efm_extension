@@ -18,6 +18,7 @@
 #include "efm_exec.h"
 
 #include "access/xact.h"
+#include "access/xlog.h"
 #include "executor/spi.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -338,8 +339,11 @@ efm_bgworker_main(Datum main_arg)
                 /* Update shared memory cache */
                 efm_update_cache(result->stdout_data, result->stdout_len);
 
-                /* Optionally persist to history table */
-                if (efm_bgw_persist_history && history_exists)
+                /*
+                 * Optionally persist to history table.
+                 * Skip if in recovery mode (standby) - can't write to tables.
+                 */
+                if (efm_bgw_persist_history && history_exists && !RecoveryInProgress())
                     efm_persist_status(result->stdout_data);
 
                 elog(DEBUG1, "EFM status updated successfully");
@@ -353,10 +357,14 @@ efm_bgworker_main(Datum main_arg)
 
             efm_free_exec_result(result);
 
-            /* Periodic cleanup (every ~1 hour) */
+            /*
+             * Periodic cleanup (every ~1 hour).
+             * Skip if in recovery mode (standby) - can't write to tables.
+             */
             cleanup_counter++;
             if (efm_bgw_persist_history && history_exists &&
-                cleanup_counter >= (3600 / efm_bgw_interval))
+                cleanup_counter >= (3600 / efm_bgw_interval) &&
+                !RecoveryInProgress())
             {
                 cleanup_counter = 0;
                 efm_cleanup_history();
