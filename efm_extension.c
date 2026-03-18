@@ -11,7 +11,7 @@
  * - Uses fork/execve instead of system() to prevent command injection
  * - Strict input validation for IP addresses and priorities
  * - Captures both stdout and stderr for proper error handling
- * - Maps EFM exit codes to PostgreSQL error levels
+ * - Maps EFM exit codes to PostgreSQL SQLSTATE codes and error messages
  *
  * Copyright (c) 2024, PostgreSQL Global Development Group
  *
