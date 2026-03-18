@@ -8,6 +8,15 @@
 #
 # IMPORTANT: This test demonstrates that EFM being down does NOT
 # break PostgreSQL - it only causes EFM-related functions to return errors.
+#
+# REQUIREMENT: The PostgreSQL container/service MUST be started with
+# MOCK_EFM_MODE=down environment variable. Setting it here via export
+# will NOT affect already-running PostgreSQL backends (environment
+# variables are inherited at process start).
+#
+# To run this test properly, use:
+#   docker-compose --profile efm_down_test up -d postgres_efm_down
+#   docker-compose exec postgres_efm_down /tests/test_efm_down.sh
 
 set -e
 
@@ -32,9 +41,14 @@ echo "========================================"
 echo ""
 echo "This test verifies PostgreSQL stability when EFM is unavailable."
 echo ""
+echo "NOTE: This test requires MOCK_EFM_MODE=down to be set when the"
+echo "      PostgreSQL server starts. Use the postgres_efm_down service."
+echo ""
 
-# Set mock EFM to 'down' mode
-log_info "Setting MOCK_EFM_MODE=down"
+# Note: This export only affects child processes of this script,
+# NOT already-running PostgreSQL backends. The container must be
+# started with this environment variable set.
+log_info "Expecting MOCK_EFM_MODE=down (set at container start)"
 export MOCK_EFM_MODE=down
 
 # Ensure extension is installed

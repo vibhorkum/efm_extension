@@ -557,9 +557,11 @@ SET search_path = pg_catalog, efm_extension
 AS $$
 BEGIN
     -- Validate hostname: no whitespace or special characters that could inject conninfo keys
-    -- Allow alphanumeric, dots, hyphens (valid for hostnames and IP addresses)
+    -- Accepts: DNS hostnames and IPv4 addresses (alphanumeric, dots, hyphens)
+    -- Note: IPv6 addresses (containing colons) are NOT supported by this validation
+    -- For IPv6 support, use the bracketed notation or a separate validation path
     IF hostname IS NULL OR hostname !~ '^[a-zA-Z0-9][a-zA-Z0-9.\-]*$' THEN
-        RAISE EXCEPTION 'Invalid hostname format: must be alphanumeric with dots/hyphens only';
+        RAISE EXCEPTION 'Invalid hostname format: must be DNS hostname or IPv4 address (alphanumeric, dots, hyphens)';
     END IF;
 
     -- Validate port range

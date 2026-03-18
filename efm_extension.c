@@ -196,7 +196,11 @@ validate_priority(const char *priority)
 }
 
 /*
- * Validate cluster name (alphanumeric and underscores only)
+ * Validate cluster name
+ * Rules:
+ * - Must start with a letter
+ * - May contain alphanumeric characters, underscores, and hyphens
+ * - Maximum length of 64 characters
  */
 bool
 validate_cluster_name(const char *name)
@@ -236,12 +240,22 @@ set_nonblocking(int fd)
     return true;
 }
 
+/* Return values for read_pipes_concurrent */
+#define PIPE_READ_COMPLETE  0   /* Both pipes reached EOF */
+#define PIPE_READ_TIMEOUT   1   /* Timed out before EOF */
+#define PIPE_READ_ERROR     2   /* Error during read */
+
 /*
  * Read from two pipes concurrently with timeout
  * This avoids deadlock when child writes more to stderr than the pipe buffer
  * while parent is blocked reading stdout.
+ *
+ * Returns:
+ *   PIPE_READ_COMPLETE - Both pipes reached EOF (normal completion)
+ *   PIPE_READ_TIMEOUT  - Timed out before EOF (child may still be running)
+ *   PIPE_READ_ERROR    - Error during read operations
  */
-static void
+static int
 read_pipes_concurrent(int stdout_fd, int stderr_fd,
                       char **stdout_data, Size *stdout_len,
                       char **stderr_data, Size *stderr_len,
@@ -256,6 +270,7 @@ read_pipes_concurrent(int stdout_fd, int stderr_fd,
     int active_fds = 2;
     bool stdout_eof = false;
     bool stderr_eof = false;
+    int result = PIPE_READ_COMPLETE;
 
     initStringInfo(&stdout_buf);
     initStringInfo(&stderr_buf);
@@ -291,7 +306,8 @@ read_pipes_concurrent(int stdout_fd, int stderr_fd,
                 remaining_ms = timeout_ms - (int)((time(NULL) - start_time) * 1000);
                 continue;
             }
-            break;  /* Real error */
+            result = PIPE_READ_ERROR;
+            break;
         }
         else if (poll_result == 0)
         {
@@ -354,10 +370,16 @@ read_pipes_concurrent(int stdout_fd, int stderr_fd,
         remaining_ms = timeout_ms - (int)((time(NULL) - start_time) * 1000);
     }
 
+    /* Check if we timed out (pipes still have data) */
+    if (remaining_ms <= 0 && active_fds > 0)
+        result = PIPE_READ_TIMEOUT;
+
     *stdout_data = stdout_buf.data;
     *stdout_len = stdout_buf.len;
     *stderr_data = stderr_buf.data;
     *stderr_len = stderr_buf.len;
+
+    return result;
 }
 
 /* Default timeout for EFM commands in seconds */
@@ -537,10 +559,40 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
      */
     {
         int timeout_ms = EFM_COMMAND_TIMEOUT_SEC * 1000;
-        read_pipes_concurrent(stdout_pipe[0], stderr_pipe[0],
-                              &result->stdout_data, &result->stdout_len,
-                              &result->stderr_data, &result->stderr_len,
-                              timeout_ms);
+        int pipe_result;
+
+        pipe_result = read_pipes_concurrent(stdout_pipe[0], stderr_pipe[0],
+                                            &result->stdout_data, &result->stdout_len,
+                                            &result->stderr_data, &result->stderr_len,
+                                            timeout_ms);
+
+        /*
+         * If pipe read timed out, the child may still be running.
+         * Kill the child BEFORE closing pipes to avoid SIGPIPE issues.
+         */
+        if (pipe_result == PIPE_READ_TIMEOUT)
+        {
+            elog(WARNING, "EFM command '%s' timed out during pipe read, killing process",
+                 efm_cmd);
+            kill(pid, SIGTERM);
+            usleep(500000);  /* Give it 500ms to terminate */
+            wait_result = waitpid(pid, &status, WNOHANG);
+            if (wait_result == 0)
+            {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+            }
+
+            close(stdout_pipe[0]);
+            close(stderr_pipe[0]);
+
+            result->exit_code = -3;  /* Timeout */
+            if (result->stderr_data)
+                pfree(result->stderr_data);
+            result->stderr_data = pstrdup("Command timed out");
+            result->stderr_len = strlen(result->stderr_data);
+            return result;
+        }
     }
 
     close(stdout_pipe[0]);
@@ -564,7 +616,7 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
 
         if (wait_result == 0)
         {
-            /* Timeout - kill the child */
+            /* Timeout waiting for child - kill it */
             elog(WARNING, "EFM command '%s' timed out after %d seconds, killing process",
                  efm_cmd, EFM_COMMAND_TIMEOUT_SEC);
             kill(pid, SIGTERM);

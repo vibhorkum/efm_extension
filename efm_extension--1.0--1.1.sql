@@ -15,6 +15,13 @@
 \echo Use "ALTER EXTENSION efm_extension UPDATE TO '1.1'" to load this file. \quit
 
 -- ============================================================================
+-- Security Hardening (ensure parity with fresh 1.1 installs)
+-- ============================================================================
+
+-- Revoke default schema access (may have been granted in 1.0)
+REVOKE ALL ON SCHEMA efm_extension FROM PUBLIC;
+
+-- ============================================================================
 -- New Composite Types
 -- ============================================================================
 
