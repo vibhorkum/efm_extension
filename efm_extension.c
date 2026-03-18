@@ -36,6 +36,7 @@
 #include "utils/pg_lsn.h"
 #include "utils/timestamp.h"
 
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -106,50 +107,30 @@ static const EfmErrorMapping efm_errors[] = {
 };
 
 /*
- * Validate IP address format (IPv4 or IPv6)
+ * Validate IP address format (IPv4 or IPv6) using inet_pton
+ * This provides strict validation for both address families.
  */
 bool
 validate_ip_address(const char *ip)
 {
-    int a, b, c, d;
-    char extra;
+    unsigned char buf[sizeof(struct in6_addr)];
 
     if (ip == NULL || *ip == '\0')
         return false;
 
-    /* Check for IPv6 (contains colons) */
-    if (strchr(ip, ':') != NULL)
-    {
-        /* Basic IPv6 validation - must contain only hex digits, colons, and dots (for mapped IPv4) */
-        for (const char *p = ip; *p; p++)
-        {
-            if (!isxdigit((unsigned char)*p) && *p != ':' && *p != '.')
-                return false;
-        }
-        /* Must have at least one colon and reasonable length */
-        if (strlen(ip) < 2 || strlen(ip) > 45)
-            return false;
+    /* Length sanity check - max IPv6 is 45 chars */
+    if (strlen(ip) > 45)
+        return false;
+
+    /* Try IPv4 first */
+    if (inet_pton(AF_INET, ip, buf) == 1)
         return true;
-    }
 
-    /* IPv4 validation */
-    if (sscanf(ip, "%d.%d.%d.%d%c", &a, &b, &c, &d, &extra) != 4)
-        return false;
+    /* Try IPv6 */
+    if (inet_pton(AF_INET6, ip, buf) == 1)
+        return true;
 
-    /* Check octet ranges */
-    if (a < 0 || a > 255 || b < 0 || b > 255 ||
-        c < 0 || c > 255 || d < 0 || d > 255)
-        return false;
-
-    /* Check for leading zeros or other invalid formats */
-    {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%d.%d.%d.%d", a, b, c, d);
-        if (strcmp(buf, ip) != 0)
-            return false;
-    }
-
-    return true;
+    return false;
 }
 
 /*
@@ -206,35 +187,71 @@ validate_cluster_name(const char *name)
 }
 
 /*
- * Read from a non-blocking file descriptor with timeout
- * Returns data read, sets *len to length. Returns NULL on error.
+ * Set a file descriptor to non-blocking mode, preserving other flags
  */
-static char *
-read_pipe_with_timeout(int fd, Size *len, int timeout_ms)
+static bool
+set_nonblocking(int fd)
 {
-    StringInfoData buf;
+    int flags = fcntl(fd, F_GETFL);
+    if (flags == -1)
+        return false;
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+        return false;
+    return true;
+}
+
+/*
+ * Read from two pipes concurrently with timeout
+ * This avoids deadlock when child writes more to stderr than the pipe buffer
+ * while parent is blocked reading stdout.
+ */
+static void
+read_pipes_concurrent(int stdout_fd, int stderr_fd,
+                      char **stdout_data, Size *stdout_len,
+                      char **stderr_data, Size *stderr_len,
+                      int timeout_ms)
+{
+    StringInfoData stdout_buf;
+    StringInfoData stderr_buf;
     char chunk[4096];
-    struct pollfd pfd;
+    struct pollfd pfds[2];
     int remaining_ms = timeout_ms;
     time_t start_time = time(NULL);
+    int active_fds = 2;
+    bool stdout_eof = false;
+    bool stderr_eof = false;
 
-    initStringInfo(&buf);
+    initStringInfo(&stdout_buf);
+    initStringInfo(&stderr_buf);
 
-    /* Set non-blocking */
-    fcntl(fd, F_SETFL, O_NONBLOCK);
-
-    pfd.fd = fd;
-    pfd.events = POLLIN;
-
-    while (remaining_ms > 0)
+    /* Set both fds non-blocking, preserving existing flags */
+    if (!set_nonblocking(stdout_fd) || !set_nonblocking(stderr_fd))
     {
-        int poll_result = poll(&pfd, 1, remaining_ms > 1000 ? 1000 : remaining_ms);
+        elog(WARNING, "Failed to set pipe to non-blocking mode");
+    }
+
+    pfds[0].fd = stdout_fd;
+    pfds[0].events = POLLIN;
+    pfds[1].fd = stderr_fd;
+    pfds[1].events = POLLIN;
+
+    while (remaining_ms > 0 && active_fds > 0)
+    {
+        int poll_result;
+        int poll_timeout = remaining_ms > 1000 ? 1000 : remaining_ms;
+
+        /* Skip closed fds */
+        if (stdout_eof)
+            pfds[0].fd = -1;
+        if (stderr_eof)
+            pfds[1].fd = -1;
+
+        poll_result = poll(pfds, 2, poll_timeout);
 
         if (poll_result < 0)
         {
             if (errno == EINTR)
             {
-                /* Update remaining time and continue */
                 remaining_ms = timeout_ms - (int)((time(NULL) - start_time) * 1000);
                 continue;
             }
@@ -247,37 +264,64 @@ read_pipe_with_timeout(int fd, Size *len, int timeout_ms)
             continue;
         }
 
-        /* Data available or EOF/error */
-        if (pfd.revents & (POLLIN | POLLHUP))
+        /* Check stdout */
+        if (!stdout_eof && (pfds[0].revents & (POLLIN | POLLHUP)))
         {
-            ssize_t nread = read(fd, chunk, sizeof(chunk));
+            ssize_t nread = read(stdout_fd, chunk, sizeof(chunk));
             if (nread > 0)
             {
-                appendBinaryStringInfo(&buf, chunk, nread);
+                appendBinaryStringInfo(&stdout_buf, chunk, nread);
             }
             else if (nread == 0)
             {
-                /* EOF - pipe closed */
-                break;
+                stdout_eof = true;
+                active_fds--;
             }
             else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
             {
-                /* Real error */
-                break;
+                stdout_eof = true;
+                active_fds--;
             }
         }
+        if (!stdout_eof && (pfds[0].revents & (POLLERR | POLLNVAL)))
+        {
+            stdout_eof = true;
+            active_fds--;
+        }
 
-        if (pfd.revents & (POLLERR | POLLNVAL))
-            break;
+        /* Check stderr */
+        if (!stderr_eof && (pfds[1].revents & (POLLIN | POLLHUP)))
+        {
+            ssize_t nread = read(stderr_fd, chunk, sizeof(chunk));
+            if (nread > 0)
+            {
+                appendBinaryStringInfo(&stderr_buf, chunk, nread);
+            }
+            else if (nread == 0)
+            {
+                stderr_eof = true;
+                active_fds--;
+            }
+            else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            {
+                stderr_eof = true;
+                active_fds--;
+            }
+        }
+        if (!stderr_eof && (pfds[1].revents & (POLLERR | POLLNVAL)))
+        {
+            stderr_eof = true;
+            active_fds--;
+        }
 
         /* Update remaining time */
         remaining_ms = timeout_ms - (int)((time(NULL) - start_time) * 1000);
     }
 
-    if (len)
-        *len = buf.len;
-
-    return buf.data;
+    *stdout_data = stdout_buf.data;
+    *stdout_len = stdout_buf.len;
+    *stderr_data = stderr_buf.data;
+    *stderr_len = stderr_buf.len;
 }
 
 /* Default timeout for EFM commands in seconds */
@@ -430,18 +474,16 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
     close(stderr_pipe[1]);
 
     /*
-     * Read output from child using poll-based non-blocking reads with timeout.
-     * This ensures we don't block indefinitely if the child hangs.
+     * Read stdout and stderr concurrently using poll-based non-blocking reads.
+     * This avoids deadlock when the child fills the stderr pipe buffer while
+     * we're blocked reading stdout.
      */
     {
         int timeout_ms = EFM_COMMAND_TIMEOUT_SEC * 1000;
-        result->stdout_data = read_pipe_with_timeout(stdout_pipe[0], &result->stdout_len, timeout_ms);
-
-        /* Recalculate remaining timeout for stderr */
-        timeout_remaining = EFM_COMMAND_TIMEOUT_SEC - (int)(time(NULL) - start_time);
-        if (timeout_remaining < 1)
-            timeout_remaining = 1;
-        result->stderr_data = read_pipe_with_timeout(stderr_pipe[0], &result->stderr_len, timeout_remaining * 1000);
+        read_pipes_concurrent(stdout_pipe[0], stderr_pipe[0],
+                              &result->stdout_data, &result->stdout_len,
+                              &result->stderr_data, &result->stderr_len,
+                              timeout_ms);
     }
 
     close(stdout_pipe[0]);
@@ -773,7 +815,7 @@ efm_cluster_status(PG_FUNCTION_ARGS)
     text *output_type = PG_GETARG_TEXT_PP(0);
     char *type_str = text_to_cstring(output_type);
 
-    require_superuser();
+    /* Monitoring function - accessible by users with EXECUTE grant */
     efm_check_config();
 
     if (SRF_IS_FIRSTCALL())
@@ -863,7 +905,7 @@ efm_cluster_status_json(PG_FUNCTION_ARGS)
     Jsonb *jb;
     char *json_str;
 
-    require_superuser();
+    /* Monitoring function - accessible by users with EXECUTE grant */
     efm_check_config();
 
     /* Check cache first */
@@ -904,7 +946,7 @@ efm_get_nodes(PG_FUNCTION_ARGS)
     FuncCallContext *funcctx;
     MemoryContext oldcontext;
 
-    require_superuser();
+    /* Monitoring function - accessible by users with EXECUTE grant */
     efm_check_config();
 
     if (SRF_IS_FIRSTCALL())
@@ -1251,7 +1293,7 @@ efm_list_properties(PG_FUNCTION_ARGS)
     FuncCallContext *funcctx;
     MemoryContext oldcontext;
 
-    require_superuser();
+    /* Monitoring function - accessible by users with EXECUTE grant */
     efm_check_config();
 
     if (SRF_IS_FIRSTCALL())
@@ -1334,7 +1376,7 @@ efm_cache_stats(PG_FUNCTION_ARGS)
     HeapTuple tuple;
     EfmCacheStats stats;
 
-    require_superuser();
+    /* Monitoring function - accessible by users with EXECUTE grant */
 
     /* Build tuple descriptor */
     tupdesc = CreateTemplateTupleDesc(5);
@@ -1401,7 +1443,7 @@ efm_is_available(PG_FUNCTION_ARGS)
     char *error_message = NULL;
     int error_code = 0;
 
-    require_superuser();
+    /* Monitoring function - accessible by users with EXECUTE grant */
 
     /* Build tuple descriptor */
     tupdesc = CreateTemplateTupleDesc(3);

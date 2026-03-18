@@ -126,9 +126,24 @@ sudo make install
 -- Create extension (requires superuser)
 CREATE EXTENSION efm_extension;
 
--- Grant access to monitoring user
+-- Grant monitoring access to non-superuser
+-- This grants access to read-only functions and views only
 SELECT efm_extension.grant_access_to_user('monitoring_user');
 ```
+
+### Access Control
+
+The extension separates monitoring (read-only) and management (write) functions:
+
+**Monitoring Functions** (accessible by granted users):
+- `efm_cluster_status()`, `efm_cluster_status_json()`, `efm_get_nodes()`
+- `efm_list_properties()`, `efm_cache_stats()`, `efm_is_available()`
+- `zabbix_node_discovery()`, all views
+
+**Management Functions** (superuser only):
+- `efm_allow_node()`, `efm_disallow_node()`, `efm_set_priority()`
+- `efm_failover()`, `efm_switchover()`, `efm_resume_monitoring()`
+- `efm_invalidate_cache()`
 
 ### Cluster Status
 

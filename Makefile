@@ -17,9 +17,9 @@ DATA = efm_extension--1.0.sql \
 
 PGFILEDESC = "efm_extension - EDB Failover Manager SQL interface"
 
-# Regression tests
-REGRESS = efm_extension
-REGRESS_OPTS = --temp-config $(srcdir)/efm_extension.conf
+# Regression tests - disabled, use Docker tests instead (see docker/)
+# REGRESS = efm_extension
+# REGRESS_OPTS = --temp-config $(srcdir)/efm_extension.conf
 
 # Use pg_config from PATH or specified location
 PG_CONFIG ?= pg_config

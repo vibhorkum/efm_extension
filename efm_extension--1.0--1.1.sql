@@ -221,6 +221,7 @@ CREATE FUNCTION efm_extension.zabbix_node_discovery()
 RETURNS jsonb
 LANGUAGE sql STABLE
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 SELECT jsonb_build_object(
     'data',
@@ -270,12 +271,13 @@ CREATE FUNCTION efm_extension.cleanup_status_history(retention_days integer DEFA
 RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     deleted_count bigint;
 BEGIN
     DELETE FROM efm_extension.efm_status_history
-    WHERE collected_at < now() - (retention_days || ' days')::interval;
+    WHERE collected_at < pg_catalog.now() - (retention_days || ' days')::interval;
 
     GET DIAGNOSTICS deleted_count = ROW_COUNT;
     RETURN deleted_count;
@@ -291,14 +293,26 @@ REVOKE ALL ON FUNCTION efm_extension.cleanup_status_history(integer) FROM PUBLIC
 -- Update existing functions with better security
 -- ============================================================================
 
--- Update grant_access_to_user with input validation
+-- Update grant_access_to_user with input validation and search_path
 CREATE OR REPLACE FUNCTION efm_extension.grant_access_to_user(username text)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     rec RECORD;
+    -- Management functions that require superuser and should NOT be granted
+    management_funcs text[] := ARRAY[
+        'efm_allow_node',
+        'efm_disallow_node',
+        'efm_set_priority',
+        'efm_failover',
+        'efm_switchover',
+        'efm_resume_monitoring',
+        'grant_access_to_user',
+        'revoke_access_from_user'
+    ];
 BEGIN
     -- Validate username (prevent SQL injection)
     IF username !~ '^[a-zA-Z_][a-zA-Z0-9_]*$' THEN
@@ -306,28 +320,35 @@ BEGIN
     END IF;
 
     -- Grant schema usage
-    EXECUTE format('GRANT USAGE ON SCHEMA efm_extension TO %I', username);
+    EXECUTE pg_catalog.format('GRANT USAGE ON SCHEMA efm_extension TO %I', username);
 
-    -- Grant access to all functions and views
+    -- Grant access to monitoring functions and views only
     FOR rec IN
         SELECT
             CASE
                 WHEN extn_objects ~* '^function' THEN
                     'GRANT EXECUTE ON ' || extn_objects
                 WHEN extn_objects ~* '^view' THEN
-                    'GRANT SELECT ON ' || regexp_replace(extn_objects, '^view ', '')
-            END AS grant_cmd
+                    'GRANT SELECT ON ' || pg_catalog.regexp_replace(extn_objects, '^view ', '')
+            END AS grant_cmd,
+            extn_objects
         FROM (
             SELECT pg_catalog.pg_describe_object(classid, objid, 0) AS extn_objects
             FROM pg_catalog.pg_depend
             WHERE refclassid = 'pg_catalog.pg_extension'::regclass
-              AND refobjid = (SELECT oid FROM pg_extension WHERE extname = 'efm_extension')
+              AND refobjid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'efm_extension')
               AND deptype = 'e'
         ) foo
         WHERE extn_objects ~* '^(view|function)'
     LOOP
+        -- Skip management functions
         IF rec.grant_cmd IS NOT NULL THEN
-            EXECUTE format('%s TO %I', rec.grant_cmd, username);
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_catalog.unnest(management_funcs) AS mf
+                WHERE rec.extn_objects ~* mf
+            ) THEN
+                EXECUTE pg_catalog.format('%s TO %I', rec.grant_cmd, username);
+            END IF;
         END IF;
     END LOOP;
 
@@ -339,11 +360,12 @@ EXCEPTION
 END;
 $$;
 
--- Update revoke_access_from_user with input validation
+-- Update revoke_access_from_user with input validation and search_path
 CREATE OR REPLACE FUNCTION efm_extension.revoke_access_from_user(username text)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     rec RECORD;
@@ -360,24 +382,24 @@ BEGIN
                 WHEN extn_objects ~* '^function' THEN
                     'REVOKE EXECUTE ON ' || extn_objects
                 WHEN extn_objects ~* '^view' THEN
-                    'REVOKE SELECT ON ' || regexp_replace(extn_objects, '^view ', '')
+                    'REVOKE SELECT ON ' || pg_catalog.regexp_replace(extn_objects, '^view ', '')
             END AS revoke_cmd
         FROM (
             SELECT pg_catalog.pg_describe_object(classid, objid, 0) AS extn_objects
             FROM pg_catalog.pg_depend
             WHERE refclassid = 'pg_catalog.pg_extension'::regclass
-              AND refobjid = (SELECT oid FROM pg_extension WHERE extname = 'efm_extension')
+              AND refobjid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'efm_extension')
               AND deptype = 'e'
         ) foo
         WHERE extn_objects ~* '^(view|function)'
     LOOP
         IF rec.revoke_cmd IS NOT NULL THEN
-            EXECUTE format('%s FROM %I', rec.revoke_cmd, username);
+            EXECUTE pg_catalog.format('%s FROM %I', rec.revoke_cmd, username);
         END IF;
     END LOOP;
 
     -- Revoke schema usage
-    EXECUTE format('REVOKE USAGE ON SCHEMA efm_extension FROM %I', username);
+    EXECUTE pg_catalog.format('REVOKE USAGE ON SCHEMA efm_extension FROM %I', username);
 
     RETURN true;
 EXCEPTION
@@ -387,7 +409,7 @@ EXCEPTION
 END;
 $$;
 
--- Update remove_pgpool_monitoring to fix parameter names
+-- Update remove_pgpool_monitoring to fix parameter names and add search_path
 CREATE OR REPLACE FUNCTION efm_extension.remove_pgpool_monitoring(
     p_hostname text,
     p_port integer,
@@ -396,6 +418,7 @@ CREATE OR REPLACE FUNCTION efm_extension.remove_pgpool_monitoring(
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
 AS $$
 BEGIN
     DELETE FROM efm_extension.pgpool_nodes
