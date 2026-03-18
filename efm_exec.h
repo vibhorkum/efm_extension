@@ -50,6 +50,7 @@ typedef struct EfmNodeArray
     int         count;
     int         capacity;
     EfmNode    *items;
+    TimestampTz fetch_timestamp;    /* When the data was fetched (same for all nodes) */
 } EfmNodeArray;
 
 /* Function declarations */

@@ -1171,6 +1171,9 @@ efm_get_nodes(PG_FUNCTION_ARGS)
         nodes = parse_efm_nodes(json_str);
         pfree(json_str);
 
+        /* Capture timestamp once for all nodes in this snapshot */
+        nodes->fetch_timestamp = GetCurrentTimestamp();
+
         funcctx->user_fctx = nodes;
         funcctx->max_calls = nodes->count;
 
@@ -1223,8 +1226,8 @@ efm_get_nodes(PG_FUNCTION_ARGS)
         else
             nulls[7] = true;
 
-        /* last_updated */
-        values[8] = TimestampTzGetDatum(GetCurrentTimestamp());
+        /* last_updated - use the timestamp captured when data was fetched */
+        values[8] = TimestampTzGetDatum(nodes->fetch_timestamp);
 
         tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 

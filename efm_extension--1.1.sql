@@ -288,7 +288,15 @@ COMMENT ON VIEW efm_extension.efm_nodes_details IS
 -- Prometheus/Grafana Compatible Metrics View
 -- ============================================================================
 
+-- Metrics view: evaluates efm_get_nodes() once via CTE to avoid repeated calls
 CREATE VIEW efm_extension.efm_metrics AS
+WITH nodes AS (
+    -- Evaluate efm_get_nodes() once; all metrics derive from this single result
+    SELECT * FROM efm_extension.efm_get_nodes()
+),
+cache_stats AS (
+    SELECT efm_extension.efm_cache_stats() AS stats
+)
 -- Total nodes metric
 SELECT
     'efm_cluster_nodes_total'::text AS metric_name,
@@ -296,7 +304,7 @@ SELECT
     jsonb_build_object(
         'cluster', current_setting('efm.cluster_name', true)
     ) AS labels
-FROM efm_extension.efm_get_nodes()
+FROM nodes
 
 UNION ALL
 
@@ -312,7 +320,7 @@ SELECT
         'node_type', node_type,
         'cluster', current_setting('efm.cluster_name', true)
     ) AS labels
-FROM efm_extension.efm_get_nodes()
+FROM nodes
 
 UNION ALL
 
@@ -326,7 +334,7 @@ SELECT
         'db_status', db_status,
         'cluster', current_setting('efm.cluster_name', true)
     ) AS labels
-FROM efm_extension.efm_get_nodes()
+FROM nodes
 
 UNION ALL
 
@@ -339,7 +347,7 @@ SELECT
         ELSE 0.0
     END AS value,
     jsonb_build_object('cluster', current_setting('efm.cluster_name', true)) AS labels
-FROM (SELECT efm_extension.efm_cache_stats() AS stats) s;
+FROM cache_stats;
 
 COMMENT ON VIEW efm_extension.efm_metrics IS
     'Prometheus/Grafana compatible metrics view for EFM monitoring';
