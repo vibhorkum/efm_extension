@@ -166,25 +166,30 @@ validate_ip_address(const char *ip)
 
 /*
  * Validate priority (must be numeric, 0-999)
+ * Uses strtol for safe parsing without overflow risk
  */
 bool
 validate_priority(const char *priority)
 {
-    int val;
-    char extra;
+    long val;
+    char *endptr;
 
     if (priority == NULL || *priority == '\0')
         return false;
 
-    /* Must be all digits */
+    /* Must be all digits (no leading +/- signs allowed) */
     for (const char *p = priority; *p; p++)
     {
         if (!isdigit((unsigned char)*p))
             return false;
     }
 
-    /* Check range */
-    if (sscanf(priority, "%d%c", &val, &extra) != 1)
+    /* Parse with strtol - safe from overflow */
+    errno = 0;
+    val = strtol(priority, &endptr, 10);
+
+    /* Check for conversion errors */
+    if (errno == ERANGE || endptr == priority || *endptr != '\0')
         return false;
 
     return (val >= 0 && val <= 999);
@@ -365,7 +370,7 @@ read_pipes_concurrent(int stdout_fd, int stderr_fd,
  * Features:
  * - Timeout handling to prevent hung processes
  * - Proper signal handling in child
- * - Non-blocking pipe reads with select()
+ * - Non-blocking pipe reads with poll()
  */
 EfmExecResult *
 efm_exec_command(const char *efm_cmd, char **args, int nargs)
@@ -377,7 +382,6 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
     int status;
     int wait_result;
     time_t start_time;
-    int timeout_remaining;
 
     result = palloc0(sizeof(EfmExecResult));
 
@@ -541,11 +545,6 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
 
     close(stdout_pipe[0]);
     close(stderr_pipe[0]);
-
-    /* Wait for child with remaining timeout */
-    timeout_remaining = EFM_COMMAND_TIMEOUT_SEC - (int)(time(NULL) - start_time);
-    if (timeout_remaining < 1)
-        timeout_remaining = 1;
 
     /* Try non-blocking wait first */
     wait_result = waitpid(pid, &status, WNOHANG);
@@ -1527,6 +1526,12 @@ efm_is_available(PG_FUNCTION_ARGS)
     }
 
     /* Check 3: Try to get cluster status (quick check) */
+    /*
+     * Wrap in PG_TRY to catch pipe/fork failures and convert them to
+     * status results rather than exceptions, maintaining the "safe to call"
+     * contract of this function.
+     */
+    PG_TRY();
     {
         EfmExecResult *result;
 
@@ -1559,6 +1564,21 @@ efm_is_available(PG_FUNCTION_ARGS)
 
         efm_free_exec_result(result);
     }
+    PG_CATCH();
+    {
+        /* Convert internal execution errors to status result */
+        ErrorData *edata;
+
+        /* Save error info before clearing */
+        MemoryContextSwitchTo(TopMemoryContext);
+        edata = CopyErrorData();
+        FlushErrorState();
+
+        error_code = 6;
+        error_message = psprintf("Internal error during EFM check: %s", edata->message);
+        FreeErrorData(edata);
+    }
+    PG_END_TRY();
 
 done:
     values[0] = BoolGetDatum(is_available);

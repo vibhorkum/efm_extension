@@ -36,15 +36,16 @@ until pg_isready -U postgres; do
 done
 
 # Create EFM database user
+# Use psql variables (-v) to safely pass the password without SQL injection risk
 echo "Creating EFM database user..."
-psql -U postgres -d postgres <<EOF
-DO \$\$
+psql -U postgres -d postgres -v efm_password="$EFM_DB_PASSWORD" <<'EOF'
+DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'efm') THEN
-        CREATE USER efm WITH PASSWORD '${EFM_DB_PASSWORD}' SUPERUSER;
+        EXECUTE format('CREATE USER efm WITH PASSWORD %L SUPERUSER', :'efm_password');
     END IF;
 END
-\$\$;
+$$;
 EOF
 
 # Create efm_extension if not exists

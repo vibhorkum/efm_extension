@@ -60,8 +60,9 @@ RUN usermod -aG postgres efm || true
 RUN echo "postgres ALL=(efm) NOPASSWD: /usr/edb/efm-${EFM_VERSION}/bin/efm" > /etc/sudoers.d/efm_postgres \
     && chmod 440 /etc/sudoers.d/efm_postgres
 
-# Allow efm user to manage PostgreSQL
-RUN echo "efm ALL=(postgres) NOPASSWD: ALL" >> /etc/sudoers.d/efm_postgres
+# Allow efm user to run specific PostgreSQL commands for failover/recovery
+# Restrict to pg_ctl and pg_isready for controlled database management
+RUN echo "efm ALL=(postgres) NOPASSWD: /usr/lib/postgresql/*/bin/pg_ctl, /usr/lib/postgresql/*/bin/pg_isready, /usr/bin/pg_ctl, /usr/bin/pg_isready" >> /etc/sudoers.d/efm_postgres
 
 # Copy extension source and build
 WORKDIR /build/efm_extension

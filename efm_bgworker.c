@@ -66,6 +66,7 @@ efm_bgw_sigterm(SIGNAL_ARGS)
 
 /*
  * Persist status to history table
+ * Uses PG_TRY/PG_CATCH to ensure proper cleanup on error
  */
 static void
 efm_persist_status(const char *json_data)
@@ -73,31 +74,63 @@ efm_persist_status(const char *json_data)
     int ret;
     Oid argtypes[1] = { TEXTOID };
     Datum values[1];
+    bool connected = false;
+    bool snapshot_pushed = false;
+    bool transaction_started = false;
 
     SetCurrentStatementStartTimestamp();
-    StartTransactionCommand();
-    SPI_connect();
-    PushActiveSnapshot(GetTransactionSnapshot());
 
-    values[0] = CStringGetTextDatum(json_data);
+    PG_TRY();
+    {
+        StartTransactionCommand();
+        transaction_started = true;
 
-    ret = SPI_execute_with_args(
-        "INSERT INTO efm_extension.efm_status_history "
-        "(status_json, collected_at) VALUES ($1::jsonb, now()) "
-        "ON CONFLICT DO NOTHING",
-        1,
-        argtypes,
-        values,
-        NULL,
-        false,
-        0);
+        SPI_connect();
+        connected = true;
 
-    if (ret != SPI_OK_INSERT)
-        elog(WARNING, "Failed to persist EFM status to history table: %d", ret);
+        PushActiveSnapshot(GetTransactionSnapshot());
+        snapshot_pushed = true;
 
-    SPI_finish();
-    PopActiveSnapshot();
-    CommitTransactionCommand();
+        values[0] = CStringGetTextDatum(json_data);
+
+        ret = SPI_execute_with_args(
+            "INSERT INTO efm_extension.efm_status_history "
+            "(status_json, collected_at) VALUES ($1::jsonb, now()) "
+            "ON CONFLICT DO NOTHING",
+            1,
+            argtypes,
+            values,
+            NULL,
+            false,
+            0);
+
+        if (ret != SPI_OK_INSERT)
+            elog(WARNING, "Failed to persist EFM status to history table: %d", ret);
+
+        SPI_finish();
+        connected = false;
+
+        PopActiveSnapshot();
+        snapshot_pushed = false;
+
+        CommitTransactionCommand();
+        transaction_started = false;
+    }
+    PG_CATCH();
+    {
+        /* Ensure cleanup happens in reverse order */
+        if (connected)
+            SPI_finish();
+        if (snapshot_pushed)
+            PopActiveSnapshot();
+        if (transaction_started)
+            AbortCurrentTransaction();
+
+        /* Log but don't re-raise - we want the BGW to continue */
+        EmitErrorReport();
+        FlushErrorState();
+    }
+    PG_END_TRY();
 
     /* Reset statement start time for next iteration */
     pgstat_report_activity(STATE_IDLE, NULL);
@@ -105,70 +138,134 @@ efm_persist_status(const char *json_data)
 
 /*
  * Cleanup old history entries
+ * Uses PG_TRY/PG_CATCH to ensure proper cleanup on error
  */
 static void
 efm_cleanup_history(void)
 {
     int ret;
+    bool connected = false;
+    bool snapshot_pushed = false;
+    bool transaction_started = false;
 
     SetCurrentStatementStartTimestamp();
-    StartTransactionCommand();
-    SPI_connect();
-    PushActiveSnapshot(GetTransactionSnapshot());
 
-    ret = SPI_execute(
-        "DELETE FROM efm_extension.efm_status_history "
-        "WHERE collected_at < now() - interval '7 days'",
-        false, 0);
+    PG_TRY();
+    {
+        StartTransactionCommand();
+        transaction_started = true;
 
-    if (ret != SPI_OK_DELETE)
-        elog(WARNING, "Failed to cleanup EFM history: %d", ret);
-    else if (SPI_processed > 0)
-        elog(LOG, "EFM background worker: cleaned up %lu old history entries",
-             (unsigned long) SPI_processed);
+        SPI_connect();
+        connected = true;
 
-    SPI_finish();
-    PopActiveSnapshot();
-    CommitTransactionCommand();
+        PushActiveSnapshot(GetTransactionSnapshot());
+        snapshot_pushed = true;
+
+        ret = SPI_execute(
+            "DELETE FROM efm_extension.efm_status_history "
+            "WHERE collected_at < now() - interval '7 days'",
+            false, 0);
+
+        if (ret != SPI_OK_DELETE)
+            elog(WARNING, "Failed to cleanup EFM history: %d", ret);
+        else if (SPI_processed > 0)
+            elog(LOG, "EFM background worker: cleaned up %lu old history entries",
+                 (unsigned long) SPI_processed);
+
+        SPI_finish();
+        connected = false;
+
+        PopActiveSnapshot();
+        snapshot_pushed = false;
+
+        CommitTransactionCommand();
+        transaction_started = false;
+    }
+    PG_CATCH();
+    {
+        if (connected)
+            SPI_finish();
+        if (snapshot_pushed)
+            PopActiveSnapshot();
+        if (transaction_started)
+            AbortCurrentTransaction();
+
+        EmitErrorReport();
+        FlushErrorState();
+    }
+    PG_END_TRY();
 
     pgstat_report_activity(STATE_IDLE, NULL);
 }
 
 /*
  * Check if the history table exists
+ * Uses PG_TRY/PG_CATCH to ensure proper cleanup on error
  */
 static bool
 efm_history_table_exists(void)
 {
     int ret;
     bool exists = false;
+    bool connected = false;
+    bool snapshot_pushed = false;
+    bool transaction_started = false;
 
     SetCurrentStatementStartTimestamp();
-    StartTransactionCommand();
-    SPI_connect();
-    PushActiveSnapshot(GetTransactionSnapshot());
 
-    ret = SPI_execute(
-        "SELECT 1 FROM pg_catalog.pg_class c "
-        "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-        "WHERE n.nspname = 'efm_extension' "
-        "AND c.relname = 'efm_status_history'",
-        true, 1);
+    PG_TRY();
+    {
+        StartTransactionCommand();
+        transaction_started = true;
 
-    if (ret == SPI_OK_SELECT && SPI_processed > 0)
-        exists = true;
+        SPI_connect();
+        connected = true;
 
-    SPI_finish();
-    PopActiveSnapshot();
-    CommitTransactionCommand();
+        PushActiveSnapshot(GetTransactionSnapshot());
+        snapshot_pushed = true;
+
+        ret = SPI_execute(
+            "SELECT 1 FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'efm_extension' "
+            "AND c.relname = 'efm_status_history'",
+            true, 1);
+
+        if (ret == SPI_OK_SELECT && SPI_processed > 0)
+            exists = true;
+
+        SPI_finish();
+        connected = false;
+
+        PopActiveSnapshot();
+        snapshot_pushed = false;
+
+        CommitTransactionCommand();
+        transaction_started = false;
+    }
+    PG_CATCH();
+    {
+        if (connected)
+            SPI_finish();
+        if (snapshot_pushed)
+            PopActiveSnapshot();
+        if (transaction_started)
+            AbortCurrentTransaction();
+
+        EmitErrorReport();
+        FlushErrorState();
+        /* Return false if we can't check - table assumed not to exist */
+    }
+    PG_END_TRY();
 
     return exists;
 }
 
 /*
  * Main entry point for the background worker
+ * PGDLLEXPORT is required for Windows builds to export the symbol for dynamic loading
  */
-void
+PGDLLEXPORT void
 efm_bgworker_main(Datum main_arg)
 {
     int cleanup_counter = 0;
@@ -267,9 +364,16 @@ efm_bgworker_main(Datum main_arg)
         }
         PG_CATCH();
         {
-            /* Don't let errors kill the worker */
+            /* Don't let errors kill the worker - ensure clean state for next iteration */
             EmitErrorReport();
             FlushErrorState();
+
+            /*
+             * If we're in a transaction (e.g., error occurred during SPI operations),
+             * abort it to ensure a clean state for the next iteration.
+             */
+            if (IsTransactionState())
+                AbortCurrentTransaction();
         }
         PG_END_TRY();
 

@@ -492,8 +492,9 @@ BEGIN
             link_status := 'OK';
         ELSE
             -- Build conninfo with proper quoting for libpq
-            -- Single quotes around values, with internal quotes/backslashes escaped
-            conninfo := 'hostaddr=' || rec.hostname ||
+            -- Use 'host=' instead of 'hostaddr=' to support both DNS names and IP addresses
+            -- hostaddr only accepts numeric IP addresses, while host accepts both
+            conninfo := 'host=' || pg_catalog.quote_literal(rec.hostname) ||
                         ' port=' || rec.port ||
                         ' dbname=' || pg_catalog.quote_literal(rec.database) ||
                         ' user=' || pg_catalog.quote_literal(rec.username) ||
@@ -539,6 +540,7 @@ $$;
 REVOKE ALL ON FUNCTION efm_extension.pgpool_backendpid_details(text, integer) FROM PUBLIC;
 
 -- Add pgpool node for monitoring
+-- Validates inputs to prevent conninfo injection attacks
 CREATE FUNCTION efm_extension.add_pgpool_monitoring(
     hostname text,
     port integer,
@@ -552,12 +554,32 @@ SECURITY DEFINER
 SET search_path = pg_catalog, efm_extension
 AS $$
 BEGIN
+    -- Validate hostname: no whitespace or special characters that could inject conninfo keys
+    -- Allow alphanumeric, dots, hyphens (valid for hostnames and IP addresses)
+    IF hostname IS NULL OR hostname !~ '^[a-zA-Z0-9][a-zA-Z0-9.\-]*$' THEN
+        RAISE EXCEPTION 'Invalid hostname format: must be alphanumeric with dots/hyphens only';
+    END IF;
+
+    -- Validate port range
+    IF port IS NULL OR port < 1 OR port > 65535 THEN
+        RAISE EXCEPTION 'Invalid port: must be between 1 and 65535';
+    END IF;
+
+    -- Validate database and username: no whitespace
+    IF database IS NULL OR database ~ '\s' THEN
+        RAISE EXCEPTION 'Invalid database name: cannot contain whitespace';
+    END IF;
+
+    IF username IS NULL OR username ~ '\s' THEN
+        RAISE EXCEPTION 'Invalid username: cannot contain whitespace';
+    END IF;
+
     INSERT INTO efm_extension.pgpool_nodes
     VALUES (hostname, port, database, username, efm_extension.encrypt_efm(password, 'efm'));
     RETURN true;
 EXCEPTION
     WHEN OTHERS THEN
-        RETURN false;
+        RAISE;  -- Re-raise validation errors
 END;
 $$;
 
