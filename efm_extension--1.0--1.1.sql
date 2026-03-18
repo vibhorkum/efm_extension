@@ -311,6 +311,7 @@ DECLARE
     rec RECORD;
     -- Management/privileged functions that should NOT be granted to monitoring users
     -- This is an exclusion list - only monitoring-safe functions will be granted
+    -- Includes pgpool/dblink helpers to prevent lateral movement via stored credentials
     management_funcs text[] := ARRAY[
         'efm_allow_node',
         'efm_disallow_node',
@@ -325,7 +326,11 @@ DECLARE
         'add_pgpool_monitoring',
         'remove_pgpool_monitoring',
         'encrypt_efm',
-        'get_efm'
+        'get_efm',
+        'get_pgpool_links',
+        'pgpool_backendpid_details',
+        'pg_is_in_recovery',
+        'pgpool_link_exists'
     ];
 BEGIN
     -- Validate username (prevent SQL injection)
