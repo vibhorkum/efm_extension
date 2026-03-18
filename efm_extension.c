@@ -633,6 +633,29 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
             result->stderr_len = strlen(result->stderr_data);
             return result;
         }
+
+        /*
+         * If pipe read encountered an I/O error, output may be truncated.
+         * Report this explicitly rather than silently proceeding with
+         * potentially incomplete data and a misleading exit code.
+         */
+        if (pipe_result == PIPE_READ_ERROR)
+        {
+            elog(WARNING, "EFM command '%s' encountered I/O error reading output",
+                 efm_cmd);
+
+            /* Still need to reap the child process */
+            close(stdout_pipe[0]);
+            close(stderr_pipe[0]);
+            waitpid(pid, &status, 0);
+
+            result->exit_code = -4;  /* I/O error during pipe read */
+            if (result->stderr_data)
+                pfree(result->stderr_data);
+            result->stderr_data = pstrdup("I/O error reading command output");
+            result->stderr_len = strlen(result->stderr_data);
+            return result;
+        }
     }
 
     close(stdout_pipe[0]);
@@ -1759,6 +1782,11 @@ efm_is_available(PG_FUNCTION_ARGS)
         {
             error_code = 4;
             error_message = "EFM command timed out - agent may be unresponsive";
+        }
+        else if (result->exit_code == -4)
+        {
+            error_code = 7;
+            error_message = "I/O error reading EFM command output";
         }
         else if (result->exit_code == 127)
         {

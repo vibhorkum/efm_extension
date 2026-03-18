@@ -12,7 +12,17 @@
 
 #include "postgres.h"
 
-/* Result structure for command execution */
+/*
+ * Result structure for command execution
+ *
+ * Internal exit codes (negative values):
+ *   -1: fork() failed
+ *   -2: pipe() or other setup failed
+ *   -3: Command timed out
+ *   -4: I/O error reading command output
+ *
+ * Positive exit codes are from the EFM command itself.
+ */
 typedef struct EfmExecResult
 {
     int         exit_code;
