@@ -355,6 +355,9 @@ read_pipes_concurrent(int stdout_fd, int stderr_fd,
             }
             else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
             {
+                /* Unexpected read error - mark as error, don't silently ignore */
+                elog(WARNING, "read() error on stdout pipe: %m");
+                result = PIPE_READ_ERROR;
                 stdout_eof = true;
                 active_fds--;
             }
@@ -380,6 +383,9 @@ read_pipes_concurrent(int stdout_fd, int stderr_fd,
             }
             else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
             {
+                /* Unexpected read error - mark as error, don't silently ignore */
+                elog(WARNING, "read() error on stderr pipe: %m");
+                result = PIPE_READ_ERROR;
                 stderr_eof = true;
                 active_fds--;
             }
