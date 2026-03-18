@@ -73,6 +73,7 @@ char *efm_sudo_path = NULL;
 char *efm_sudo_user = NULL;
 char *efm_cluster_name = NULL;
 char *efm_properties_file_loc = NULL;
+char *efm_encryption_key = NULL;
 
 /* Internal function declarations */
 void _PG_init(void);
@@ -461,13 +462,23 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         sigemptyset(&sigmask);
         sigprocmask(SIG_SETMASK, &sigmask, NULL);
 
-        /* Close all file descriptors except stdin, stdout, stderr and our pipes */
+        /*
+         * Close all file descriptors except stdin, stdout, stderr and our pipes.
+         * Cap max_fd to avoid excessive looping on systems where RLIMIT_NOFILE
+         * is set very high (e.g., hundreds of thousands). In practice, PostgreSQL
+         * doesn't leave many FDs open beyond its connection sockets.
+         */
         {
+#define EFM_MAX_FD_CLOSE_LIMIT  4096  /* Reasonable upper bound for iteration */
             struct rlimit rl;
             int max_fd = 1024;  /* fallback if getrlimit fails */
 
             if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
                 max_fd = (int) rl.rlim_cur;
+
+            /* Cap to avoid excessive iteration on high-limit systems */
+            if (max_fd > EFM_MAX_FD_CLOSE_LIMIT)
+                max_fd = EFM_MAX_FD_CLOSE_LIMIT;
 
             for (i = 3; i < max_fd; i++)
             {
@@ -950,9 +961,6 @@ efm_cluster_status(PG_FUNCTION_ARGS)
     FuncCallContext *funcctx;
     MemoryContext oldcontext;
 
-    text *output_type = PG_GETARG_TEXT_PP(0);
-    char *type_str = text_to_cstring(output_type);
-
     if (SRF_IS_FIRSTCALL())
     {
         EfmExecResult *result;
@@ -961,6 +969,8 @@ efm_cluster_status(PG_FUNCTION_ARGS)
         char *line;
         char *saveptr;
         List *lines = NIL;
+        text *output_type = PG_GETARG_TEXT_PP(0);
+        char *type_str = text_to_cstring(output_type);
 
         funcctx = SRF_FIRSTCALL_INIT();
         oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -988,6 +998,7 @@ efm_cluster_status(PG_FUNCTION_ARGS)
                 initStringInfo(&buf);
                 appendStringInfoString(&buf, cached);
                 pfree(cached);
+                pfree(type_str);  /* Free before goto to avoid leak */
                 goto parse_output;
             }
         }
@@ -1004,6 +1015,9 @@ efm_cluster_status(PG_FUNCTION_ARGS)
             efm_update_cache(result->stdout_data, result->stdout_len);
 
         efm_free_exec_result(result);
+
+        /* Free type_str - no longer needed after command selection and cache update */
+        pfree(type_str);
 
 parse_output:
         /* Split output into lines */
@@ -1921,6 +1935,22 @@ _PG_init(void)
                              PGC_SIGHUP,
                              0,
                              NULL, NULL, NULL);
+
+    /*
+     * Encryption key for pgpool credential storage.
+     * Default is 'efm' for backward compatibility, but installations should
+     * set a unique per-installation secret via postgresql.conf.
+     * Access restricted to superusers to protect the key from disclosure.
+     */
+    DefineCustomStringVariable("efm.encryption_key",
+                               "Encryption key for pgpool credential storage",
+                               "Set a unique secret per installation. "
+                               "Only superusers can view/modify this setting.",
+                               &efm_encryption_key,
+                               "efm",  /* default for backward compatibility */
+                               PGC_SUSET,
+                               GUC_SUPERUSER_ONLY,
+                               NULL, NULL, NULL);
 
 #if PG_VERSION_NUM >= 150000
     MarkGUCPrefixReserved("efm");

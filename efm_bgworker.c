@@ -37,6 +37,10 @@ int efm_bgw_interval = 10;          /* Poll every 10 seconds */
 char *efm_bgw_database = NULL;
 bool efm_bgw_persist_history = false;
 
+/* External GUC variables from efm_extension.c */
+extern char *efm_cluster_name;
+extern char *efm_path_command;
+
 /* Signal handling */
 static volatile sig_atomic_t got_sighup = false;
 static volatile sig_atomic_t got_sigterm = false;
@@ -271,6 +275,7 @@ efm_bgworker_main(Datum main_arg)
 {
     int cleanup_counter = 0;
     bool history_exists = false;
+    bool config_warning_logged = false;  /* Track if we've warned about missing config */
 
     /* Establish signal handlers */
     pqsignal(SIGHUP, efm_bgw_sighup);
@@ -314,6 +319,9 @@ efm_bgworker_main(Datum main_arg)
             /* Re-check history table existence after reload */
             if (efm_bgw_persist_history)
                 history_exists = efm_history_table_exists();
+
+            /* Reset config warning flag so we log again if still misconfigured */
+            config_warning_logged = false;
         }
 
         /* Check for shutdown request */
@@ -328,6 +336,23 @@ efm_bgworker_main(Datum main_arg)
         PG_TRY();
         {
             EfmExecResult *result;
+
+            /*
+             * Skip polling if required GUCs are not configured.
+             * Log a warning once per reload cycle to avoid spamming logs.
+             * config_warning_logged is reset on SIGHUP so we re-warn after config reload.
+             */
+            if (efm_cluster_name == NULL || *efm_cluster_name == '\0' ||
+                efm_path_command == NULL || *efm_path_command == '\0')
+            {
+                if (!config_warning_logged)
+                {
+                    elog(WARNING, "EFM background worker: efm.cluster_name and efm.command_path "
+                         "must be configured; skipping polling until set");
+                    config_warning_logged = true;
+                }
+                continue;
+            }
 
             pgstat_report_activity(STATE_RUNNING, "polling EFM status");
 

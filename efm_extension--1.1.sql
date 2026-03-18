@@ -495,11 +495,12 @@ BEGIN
             -- Build conninfo with proper quoting for libpq
             -- Use 'host=' instead of 'hostaddr=' to support both DNS names and IP addresses
             -- hostaddr only accepts numeric IP addresses, while host accepts both
+            -- Use efm.encryption_key GUC instead of hardcoded key for security
             conninfo := 'host=' || pg_catalog.quote_literal(rec.hostname) ||
                         ' port=' || rec.port ||
                         ' dbname=' || pg_catalog.quote_literal(rec.database) ||
                         ' user=' || pg_catalog.quote_literal(rec.username) ||
-                        ' password=' || pg_catalog.quote_literal(efm_extension.get_efm(rec.password, 'efm'));
+                        ' password=' || pg_catalog.quote_literal(efm_extension.get_efm(rec.password, pg_catalog.current_setting('efm.encryption_key')));
             link_status := dblink_connect('pgpool_' || rec.hostname, conninfo);
         END IF;
         RETURN NEXT ('pgpool_' || rec.hostname, link_status)::efm_extension.pool_link_status;
@@ -578,8 +579,9 @@ BEGIN
         RAISE EXCEPTION 'Invalid username: cannot contain whitespace';
     END IF;
 
+    -- Use efm.encryption_key GUC instead of hardcoded key for security
     INSERT INTO efm_extension.pgpool_nodes
-    VALUES (hostname, port, database, username, efm_extension.encrypt_efm(password, 'efm'));
+    VALUES (hostname, port, database, username, efm_extension.encrypt_efm(password, pg_catalog.current_setting('efm.encryption_key')));
     RETURN true;
 EXCEPTION
     WHEN OTHERS THEN
