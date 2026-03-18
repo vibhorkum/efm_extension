@@ -50,16 +50,17 @@ efm_shmem_size(void)
 
 /*
  * Request shared memory space during postmaster startup
+ *
+ * In PG15+, this is called via shmem_request_hook after shared_preload_libraries
+ * processing completes, so we don't check process_shared_preload_libraries_in_progress
+ * here - the caller (_PG_init) already ensures the hook is only installed during
+ * shared_preload_libraries processing.
  */
 void
 efm_shmem_request(void)
 {
 #if PG_VERSION_NUM >= 150000
-    if (process_shared_preload_libraries_in_progress)
-    {
-        RequestAddinShmemSpace(efm_shmem_size());
-        /* We use an embedded LWLock in the cache struct, no need for named tranche */
-    }
+    RequestAddinShmemSpace(efm_shmem_size());
 #endif
 }
 
