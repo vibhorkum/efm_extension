@@ -107,8 +107,34 @@ static const EfmErrorMapping efm_errors[] = {
 };
 
 /*
+ * Check if an IPv4 address has leading zeros in any octet
+ * Returns true if leading zeros are found (invalid)
+ */
+static bool
+ipv4_has_leading_zeros(const char *ip)
+{
+    const char *p = ip;
+
+    while (*p)
+    {
+        /* Check for leading zero: either "0X" where X is a digit, or at start */
+        if (*p == '0' && isdigit((unsigned char)p[1]))
+            return true;
+
+        /* Skip to next octet */
+        while (*p && *p != '.')
+            p++;
+        if (*p == '.')
+            p++;
+    }
+    return false;
+}
+
+/*
  * Validate IP address format (IPv4 or IPv6) using inet_pton
- * This provides strict validation for both address families.
+ * with additional strict checks:
+ * - Rejects IPv4 addresses with leading zeros in octets (e.g., 192.168.01.1)
+ * - Uses inet_pton for proper address family validation
  */
 bool
 validate_ip_address(const char *ip)
@@ -124,7 +150,12 @@ validate_ip_address(const char *ip)
 
     /* Try IPv4 first */
     if (inet_pton(AF_INET, ip, buf) == 1)
+    {
+        /* Additional check: reject leading zeros in octets */
+        if (ipv4_has_leading_zeros(ip))
+            return false;
         return true;
+    }
 
     /* Try IPv6 */
     if (inet_pton(AF_INET6, ip, buf) == 1)
@@ -451,13 +482,35 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         /*
          * Execute command with minimal environment for sudo to work
          * We need PATH for sudo to find shells and HOME for some sudo configs
+         * Also pass through MOCK_EFM_* variables for testing
          */
         {
-            char *envp[4];
-            envp[0] = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-            envp[1] = "HOME=/tmp";
-            envp[2] = "LANG=C";
-            envp[3] = NULL;
+            char *envp[8];
+            int env_idx = 0;
+            char *mock_mode;
+            char *mock_delay;
+
+            envp[env_idx++] = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+            envp[env_idx++] = "HOME=/tmp";
+            envp[env_idx++] = "LANG=C";
+
+            /* Pass through mock test variables if present */
+            mock_mode = getenv("MOCK_EFM_MODE");
+            if (mock_mode)
+            {
+                static char mock_mode_env[256];
+                snprintf(mock_mode_env, sizeof(mock_mode_env), "MOCK_EFM_MODE=%s", mock_mode);
+                envp[env_idx++] = mock_mode_env;
+            }
+            mock_delay = getenv("MOCK_EFM_DELAY");
+            if (mock_delay)
+            {
+                static char mock_delay_env[256];
+                snprintf(mock_delay_env, sizeof(mock_delay_env), "MOCK_EFM_DELAY=%s", mock_delay);
+                envp[env_idx++] = mock_delay_env;
+            }
+
+            envp[env_idx] = NULL;
 
             execve(efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo", argv, envp);
         }
@@ -499,17 +552,15 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
 
     if (wait_result == 0)
     {
-        /* Child still running, wait with timeout */
-        int elapsed = 0;
-        while (elapsed < timeout_remaining)
+        /* Child still running, wait with timeout using time-based deadline */
+        time_t deadline = start_time + EFM_COMMAND_TIMEOUT_SEC;
+
+        while (time(NULL) < deadline)
         {
-            usleep(100000);  /* 100ms */
-            elapsed++;
+            usleep(100000);  /* 100ms sleep between checks */
             wait_result = waitpid(pid, &status, WNOHANG);
             if (wait_result != 0)
                 break;
-            if (elapsed % 10 == 0)  /* Check every second */
-                elapsed = (int)(time(NULL) - start_time);
         }
 
         if (wait_result == 0)

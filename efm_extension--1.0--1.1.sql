@@ -302,7 +302,8 @@ SET search_path = pg_catalog, efm_extension
 AS $$
 DECLARE
     rec RECORD;
-    -- Management functions that require superuser and should NOT be granted
+    -- Management/privileged functions that should NOT be granted to monitoring users
+    -- This is an exclusion list - only monitoring-safe functions will be granted
     management_funcs text[] := ARRAY[
         'efm_allow_node',
         'efm_disallow_node',
@@ -310,8 +311,14 @@ DECLARE
         'efm_failover',
         'efm_switchover',
         'efm_resume_monitoring',
+        'efm_invalidate_cache',
+        'cleanup_status_history',
         'grant_access_to_user',
-        'revoke_access_from_user'
+        'revoke_access_from_user',
+        'add_pgpool_monitoring',
+        'remove_pgpool_monitoring',
+        'encrypt_efm',
+        'get_efm'
     ];
 BEGIN
     -- Validate username (prevent SQL injection)

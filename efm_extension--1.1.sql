@@ -477,22 +477,33 @@ REVOKE ALL ON FUNCTION efm_extension.pgpool_link_exists(text) FROM PUBLIC;
 -- Get pgpool connection links
 CREATE FUNCTION efm_extension.get_pgpool_links()
 RETURNS SETOF efm_extension.pool_link_status
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, efm_extension
 AS $$
-    SELECT
-        'pgpool_' || hostname AS link_name,
-        CASE
-            WHEN efm_extension.pgpool_link_exists('pgpool_' || hostname) THEN 'OK'
-            ELSE dblink_connect(
-                'pgpool_' || hostname,
-                format('hostaddr=%s port=%s dbname=%I user=%I password=%I',
-                    hostname, port, database, username,
-                    efm_extension.get_efm(password, 'efm'))
-            )
-        END AS status
-    FROM efm_extension.pgpool_nodes;
+DECLARE
+    rec RECORD;
+    conninfo text;
+    link_status text;
+BEGIN
+    FOR rec IN SELECT hostname, port, database, username, password FROM efm_extension.pgpool_nodes
+    LOOP
+        IF efm_extension.pgpool_link_exists('pgpool_' || rec.hostname) THEN
+            link_status := 'OK';
+        ELSE
+            -- Build conninfo with proper quoting for libpq
+            -- Single quotes around values, with internal quotes/backslashes escaped
+            conninfo := 'hostaddr=' || rec.hostname ||
+                        ' port=' || rec.port ||
+                        ' dbname=' || pg_catalog.quote_literal(rec.database) ||
+                        ' user=' || pg_catalog.quote_literal(rec.username) ||
+                        ' password=' || pg_catalog.quote_literal(efm_extension.get_efm(rec.password, 'efm'));
+            link_status := dblink_connect('pgpool_' || rec.hostname, conninfo);
+        END IF;
+        RETURN NEXT ('pgpool_' || rec.hostname, link_status)::efm_extension.pool_link_status;
+    END LOOP;
+    RETURN;
+END;
 $$;
 
 REVOKE ALL ON FUNCTION efm_extension.get_pgpool_links() FROM PUBLIC;
@@ -647,7 +658,8 @@ AS $$
 DECLARE
     rec RECORD;
     sql_cmd text;
-    -- Management functions that require superuser and should NOT be granted
+    -- Management/privileged functions that should NOT be granted to monitoring users
+    -- This is an exclusion list - only monitoring-safe functions will be granted
     management_funcs text[] := ARRAY[
         'efm_allow_node',
         'efm_disallow_node',
@@ -655,8 +667,14 @@ DECLARE
         'efm_failover',
         'efm_switchover',
         'efm_resume_monitoring',
+        'efm_invalidate_cache',
+        'cleanup_status_history',
         'grant_access_to_user',
-        'revoke_access_from_user'
+        'revoke_access_from_user',
+        'add_pgpool_monitoring',
+        'remove_pgpool_monitoring',
+        'encrypt_efm',
+        'get_efm'
     ];
 BEGIN
     -- Validate username (prevent SQL injection)
