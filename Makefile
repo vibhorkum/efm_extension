@@ -29,7 +29,10 @@ PGXS := $(shell $(PG_CONFIG) --pgxs)
 PG_VERSION := $(shell $(PG_CONFIG) --version | sed 's/[^0-9.]//g' | cut -d. -f1)
 
 # Compiler flags
+# Only add libpq include path if it's defined and non-empty
+ifdef libpq_srcdir
 PG_CPPFLAGS = -I$(libpq_srcdir)
+endif
 PG_CFLAGS = -Wall -Wmissing-prototypes -Wpointer-arith \
             -Wdeclaration-after-statement -Wendif-labels \
             -Wmissing-format-attribute -Wformat-security

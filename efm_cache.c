@@ -141,7 +141,18 @@ efm_cache_valid(void)
 
 /*
  * Get cached status data
- * Returns a palloc'd copy of the cached data, or NULL if cache is invalid
+ *
+ * Returns a palloc'd copy of the cached data, or NULL if no data is cached.
+ *
+ * IMPORTANT: This function does NOT check TTL/expiry. Callers must call
+ * efm_cache_valid() first to verify the cache is not stale. This function
+ * only checks if data exists, not whether it's still valid.
+ *
+ * Usage pattern:
+ *   if (efm_cache_valid()) {
+ *       char *data = efm_get_cached_status();
+ *       if (data) { ... }
+ *   }
  */
 char *
 efm_get_cached_status(void)

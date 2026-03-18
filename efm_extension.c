@@ -777,6 +777,8 @@ parse_efm_nodes(const char *json_data)
     JsonbValue v;
     JsonbIteratorToken type;
     bool in_nodes = false;
+    int nodes_nesting_level = 0;    /* Track nesting depth within "nodes" object */
+    int current_nesting = 0;        /* Track overall nesting depth */
     char current_ip[64] = "";
 
     nodes = palloc0(sizeof(EfmNodeArray));
@@ -792,12 +794,37 @@ parse_efm_nodes(const char *json_data)
 
     while ((type = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)
     {
-        if (type == WJB_KEY)
+        /* Track nesting level to know when we leave the "nodes" object */
+        if (type == WJB_BEGIN_OBJECT || type == WJB_BEGIN_ARRAY)
+        {
+            current_nesting++;
+        }
+        else if (type == WJB_END_OBJECT || type == WJB_END_ARRAY)
+        {
+            current_nesting--;
+
+            /* Check if we're leaving the "nodes" object */
+            if (in_nodes && current_nesting < nodes_nesting_level)
+            {
+                in_nodes = false;
+                nodes_nesting_level = 0;
+            }
+
+            /* Reset current_ip when leaving a node object */
+            if (in_nodes && current_ip[0] != '\0' && type == WJB_END_OBJECT)
+            {
+                current_ip[0] = '\0';
+            }
+        }
+        else if (type == WJB_KEY)
         {
             char *key = pnstrdup(v.val.string.val, v.val.string.len);
 
             if (strcmp(key, "nodes") == 0)
+            {
                 in_nodes = true;
+                nodes_nesting_level = current_nesting;  /* Remember the nesting level */
+            }
             else if (in_nodes && validate_ip_address(key))
             {
                 /* This is a node IP */
@@ -860,7 +887,20 @@ parse_efm_nodes(const char *json_data)
                             strncpy(node->xlog_info, val, sizeof(node->xlog_info) - 1);
                         else if (strcmp(key, "priority") == 0)
                         {
-                            node->priority = atoi(val);
+                            /* Use strtol for safe parsing with error checking */
+                            char *endptr;
+                            long priority_val;
+
+                            errno = 0;
+                            priority_val = strtol(val, &endptr, 10);
+
+                            /* Check for conversion errors */
+                            if (errno == 0 && endptr != val && *endptr == '\0' &&
+                                priority_val >= INT_MIN && priority_val <= INT_MAX)
+                            {
+                                node->priority = (int) priority_val;
+                            }
+                            /* else: leave as -1 (not set) for invalid values */
                         }
                         else if (strcmp(key, "promotable") == 0)
                         {
@@ -876,10 +916,6 @@ parse_efm_nodes(const char *json_data)
             }
 
             pfree(key);
-        }
-        else if (type == WJB_END_OBJECT && in_nodes && current_ip[0] != '\0')
-        {
-            current_ip[0] = '\0';
         }
     }
 
@@ -917,9 +953,6 @@ efm_cluster_status(PG_FUNCTION_ARGS)
     text *output_type = PG_GETARG_TEXT_PP(0);
     char *type_str = text_to_cstring(output_type);
 
-    /* Monitoring function - accessible by users with EXECUTE grant */
-    efm_check_config();
-
     if (SRF_IS_FIRSTCALL())
     {
         EfmExecResult *result;
@@ -931,6 +964,9 @@ efm_cluster_status(PG_FUNCTION_ARGS)
 
         funcctx = SRF_FIRSTCALL_INIT();
         oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+        /* Check config only once per query invocation (not per row) */
+        efm_check_config();
 
         /* Determine command based on output type */
         if (strcmp(type_str, "text") == 0)
@@ -1048,9 +1084,6 @@ efm_get_nodes(PG_FUNCTION_ARGS)
     FuncCallContext *funcctx;
     MemoryContext oldcontext;
 
-    /* Monitoring function - accessible by users with EXECUTE grant */
-    efm_check_config();
-
     if (SRF_IS_FIRSTCALL())
     {
         TupleDesc tupdesc;
@@ -1060,6 +1093,9 @@ efm_get_nodes(PG_FUNCTION_ARGS)
 
         funcctx = SRF_FIRSTCALL_INIT();
         oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+        /* Check config only once per query invocation (not per row) */
+        efm_check_config();
 
         /* Build tuple descriptor */
         tupdesc = CreateTemplateTupleDesc(9);
@@ -1435,9 +1471,6 @@ efm_list_properties(PG_FUNCTION_ARGS)
     FuncCallContext *funcctx;
     MemoryContext oldcontext;
 
-    /* Monitoring function - accessible by users with EXECUTE grant */
-    efm_check_config();
-
     if (SRF_IS_FIRSTCALL())
     {
         char *properties_path;
@@ -1447,6 +1480,9 @@ efm_list_properties(PG_FUNCTION_ARGS)
 
         funcctx = SRF_FIRSTCALL_INIT();
         oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+        /* Check config only once per query invocation (not per row) */
+        efm_check_config();
 
         /* Build properties file path */
         if (efm_properties_file_loc == NULL || *efm_properties_file_loc == '\0')
