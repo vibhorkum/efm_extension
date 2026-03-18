@@ -465,11 +465,15 @@ $$;
 REVOKE ALL ON FUNCTION efm_extension.get_efm(bytea, text) FROM PUBLIC;
 
 -- Check if pgpool link exists
+-- Note: includes 'public' in search_path for dblink functions (typically installed there)
+-- SECURITY DEFINER required since this is called from other SECURITY DEFINER functions
 CREATE FUNCTION efm_extension.pgpool_link_exists(link_name text)
 RETURNS boolean
 LANGUAGE sql STRICT
+SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension, public
 AS $$
-    SELECT COALESCE(link_name = ANY(dblink_get_connections()), false);
+    SELECT COALESCE(link_name = ANY(public.dblink_get_connections()), false);
 $$;
 
 REVOKE ALL ON FUNCTION efm_extension.pgpool_link_exists(text) FROM PUBLIC;
@@ -496,11 +500,12 @@ BEGIN
             -- Use 'host=' instead of 'hostaddr=' to support both DNS names and IP addresses
             -- hostaddr only accepts numeric IP addresses, while host accepts both
             -- Use efm.encryption_key GUC instead of hardcoded key for security
+            -- current_setting with missing_ok=true returns NULL if GUC not loaded; fallback to 'efm'
             conninfo := 'host=' || pg_catalog.quote_literal(rec.hostname) ||
                         ' port=' || rec.port ||
                         ' dbname=' || pg_catalog.quote_literal(rec.database) ||
                         ' user=' || pg_catalog.quote_literal(rec.username) ||
-                        ' password=' || pg_catalog.quote_literal(efm_extension.get_efm(rec.password, pg_catalog.current_setting('efm.encryption_key')));
+                        ' password=' || pg_catalog.quote_literal(efm_extension.get_efm(rec.password, COALESCE(pg_catalog.current_setting('efm.encryption_key', true), 'efm')));
             link_status := dblink_connect('pgpool_' || rec.hostname, conninfo);
         END IF;
         RETURN NEXT ('pgpool_' || rec.hostname, link_status)::efm_extension.pool_link_status;
@@ -580,8 +585,9 @@ BEGIN
     END IF;
 
     -- Use efm.encryption_key GUC instead of hardcoded key for security
+    -- current_setting with missing_ok=true returns NULL if GUC not loaded; fallback to 'efm'
     INSERT INTO efm_extension.pgpool_nodes
-    VALUES (hostname, port, database, username, efm_extension.encrypt_efm(password, pg_catalog.current_setting('efm.encryption_key')));
+    VALUES (hostname, port, database, username, efm_extension.encrypt_efm(password, COALESCE(pg_catalog.current_setting('efm.encryption_key', true), 'efm')));
     RETURN true;
 EXCEPTION
     WHEN OTHERS THEN

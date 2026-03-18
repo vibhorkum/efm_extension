@@ -6,8 +6,10 @@ default_version = '1.1'
 module_pathname = '$libdir/efm_extension'
 
 # Security settings
-# Note: Core EFM functions require superuser, but monitoring views
-# can be granted to non-superusers via efm_extension.grant_access_to_user()
+# Note: Management functions (failover, switchover, allow/disallow_node, etc.)
+# require superuser privileges. Monitoring functions and views (efm_cluster_status,
+# efm_get_nodes, efm_cache_stats, etc.) can be granted to non-superusers
+# via efm_extension.grant_access_to_user().
 superuser = true
 
 # Trusted extension support (PostgreSQL 13+)

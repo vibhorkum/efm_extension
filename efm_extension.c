@@ -194,12 +194,13 @@ validate_priority(const char *priority)
 {
     long val;
     char *endptr;
+    const char *p;
 
     if (priority == NULL || *priority == '\0')
         return false;
 
     /* Must be all digits (no leading +/- signs allowed) */
-    for (const char *p = priority; *p; p++)
+    for (p = priority; *p; p++)
     {
         if (!isdigit((unsigned char)*p))
             return false;
@@ -226,6 +227,8 @@ validate_priority(const char *priority)
 bool
 validate_cluster_name(const char *name)
 {
+    const char *p;
+
     if (name == NULL || *name == '\0')
         return false;
 
@@ -234,7 +237,7 @@ validate_cluster_name(const char *name)
         return false;
 
     /* Only alphanumeric, underscore, hyphen */
-    for (const char *p = name; *p; p++)
+    for (p = name; *p; p++)
     {
         if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-')
             return false;
