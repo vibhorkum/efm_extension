@@ -449,27 +449,69 @@ COMMENT ON TABLE efm_extension.pgpool_nodes IS
 REVOKE ALL ON TABLE efm_extension.pgpool_nodes FROM PUBLIC;
 
 -- Encryption helper
--- Note: pgcrypto's encrypt() is typically installed in public schema
+-- Dynamically resolves pgcrypto schema so it works regardless of where pgcrypto is installed
 CREATE FUNCTION efm_extension.encrypt_efm(plaintext text, key text)
 RETURNS bytea
-LANGUAGE sql STRICT
+LANGUAGE plpgsql STRICT
 SECURITY DEFINER
 SET search_path = pg_catalog, efm_extension
 AS $$
-    SELECT public.encrypt(plaintext::bytea, key::bytea, 'aes');
+DECLARE
+    pgcrypto_schema text;
+    result bytea;
+BEGIN
+    -- Find the schema where pgcrypto's encrypt function is installed
+    SELECT n.nspname INTO pgcrypto_schema
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid
+    WHERE p.proname = 'encrypt'
+      AND pg_catalog.pg_get_function_arguments(p.oid) = 'bytea, bytea, text'
+    LIMIT 1;
+
+    IF pgcrypto_schema IS NULL THEN
+        RAISE EXCEPTION 'pgcrypto extension not found. Please install it: CREATE EXTENSION pgcrypto;';
+    END IF;
+
+    EXECUTE pg_catalog.format('SELECT %I.encrypt($1::bytea, $2::bytea, $3)', pgcrypto_schema)
+    INTO result
+    USING plaintext, key, 'aes';
+
+    RETURN result;
+END;
 $$;
 
 REVOKE ALL ON FUNCTION efm_extension.encrypt_efm(text, text) FROM PUBLIC;
 
 -- Decryption helper
--- Note: pgcrypto's decrypt() is typically installed in public schema
+-- Dynamically resolves pgcrypto schema so it works regardless of where pgcrypto is installed
 CREATE FUNCTION efm_extension.get_efm(ciphertext bytea, key text)
 RETURNS text
-LANGUAGE sql STRICT
+LANGUAGE plpgsql STRICT
 SECURITY DEFINER
 SET search_path = pg_catalog, efm_extension
 AS $$
-    SELECT pg_catalog.convert_from(public.decrypt(ciphertext, key::bytea, 'aes'), 'SQL_ASCII');
+DECLARE
+    pgcrypto_schema text;
+    result bytea;
+BEGIN
+    -- Find the schema where pgcrypto's decrypt function is installed
+    SELECT n.nspname INTO pgcrypto_schema
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid
+    WHERE p.proname = 'decrypt'
+      AND pg_catalog.pg_get_function_arguments(p.oid) = 'bytea, bytea, text'
+    LIMIT 1;
+
+    IF pgcrypto_schema IS NULL THEN
+        RAISE EXCEPTION 'pgcrypto extension not found. Please install it: CREATE EXTENSION pgcrypto;';
+    END IF;
+
+    EXECUTE pg_catalog.format('SELECT %I.decrypt($1, $2::bytea, $3)', pgcrypto_schema)
+    INTO result
+    USING ciphertext, key, 'aes';
+
+    RETURN pg_catalog.convert_from(result, 'SQL_ASCII');
+END;
 $$;
 
 REVOKE ALL ON FUNCTION efm_extension.get_efm(bytea, text) FROM PUBLIC;
