@@ -459,3 +459,155 @@ $$;
 
 -- Drop old version with wrong signature if exists
 DROP FUNCTION IF EXISTS efm_extension.remove_pgpool_monitoring(text, integer, text, text, text);
+
+-- ============================================================================
+-- Security Hardening for Helper Functions
+-- These CREATE OR REPLACE statements ensure upgraded clusters have the same
+-- security hardening (pinned search_path, schema-qualified calls) as fresh 1.1 installs
+-- ============================================================================
+
+-- Update encrypt_efm with search_path and schema-qualified pgcrypto call
+CREATE OR REPLACE FUNCTION efm_extension.encrypt_efm(plaintext text, key text)
+RETURNS bytea
+LANGUAGE sql STRICT
+SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
+AS $$
+    SELECT public.encrypt(plaintext::bytea, key::bytea, 'aes');
+$$;
+
+REVOKE ALL ON FUNCTION efm_extension.encrypt_efm(text, text) FROM PUBLIC;
+
+-- Update get_efm with search_path and schema-qualified pgcrypto call
+CREATE OR REPLACE FUNCTION efm_extension.get_efm(ciphertext bytea, key text)
+RETURNS text
+LANGUAGE sql STRICT
+SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
+AS $$
+    SELECT pg_catalog.convert_from(public.decrypt(ciphertext, key::bytea, 'aes'), 'SQL_ASCII');
+$$;
+
+REVOKE ALL ON FUNCTION efm_extension.get_efm(bytea, text) FROM PUBLIC;
+
+-- Update pgpool_link_exists with SECURITY DEFINER and search_path
+CREATE OR REPLACE FUNCTION efm_extension.pgpool_link_exists(link_name text)
+RETURNS boolean
+LANGUAGE sql STRICT
+SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension, public
+AS $$
+    SELECT COALESCE(link_name = ANY(public.dblink_get_connections()), false);
+$$;
+
+REVOKE ALL ON FUNCTION efm_extension.pgpool_link_exists(text) FROM PUBLIC;
+
+-- Update get_pgpool_links with search_path and encryption key fallback
+CREATE OR REPLACE FUNCTION efm_extension.get_pgpool_links()
+RETURNS SETOF efm_extension.pool_link_status
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension, public
+AS $$
+DECLARE
+    rec RECORD;
+    conninfo text;
+    link_status text;
+BEGIN
+    FOR rec IN SELECT hostname, port, database, username, password FROM efm_extension.pgpool_nodes
+    LOOP
+        IF efm_extension.pgpool_link_exists('pgpool_' || rec.hostname) THEN
+            link_status := 'OK';
+        ELSE
+            -- Use efm.encryption_key GUC instead of hardcoded key for security
+            -- current_setting with missing_ok=true returns NULL if GUC not loaded; fallback to 'efm'
+            conninfo := 'host=' || pg_catalog.quote_literal(rec.hostname) ||
+                        ' port=' || rec.port ||
+                        ' dbname=' || pg_catalog.quote_literal(rec.database) ||
+                        ' user=' || pg_catalog.quote_literal(rec.username) ||
+                        ' password=' || pg_catalog.quote_literal(efm_extension.get_efm(rec.password, COALESCE(pg_catalog.current_setting('efm.encryption_key', true), 'efm')));
+            link_status := dblink_connect('pgpool_' || rec.hostname, conninfo);
+        END IF;
+        RETURN NEXT ('pgpool_' || rec.hostname, link_status)::efm_extension.pool_link_status;
+    END LOOP;
+    RETURN;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION efm_extension.get_pgpool_links() FROM PUBLIC;
+
+-- Update pgpool_backendpid_details with search_path
+CREATE OR REPLACE FUNCTION efm_extension.pgpool_backendpid_details(
+    conn_name text,
+    backend_pid integer
+)
+RETURNS SETOF efm_extension.pool_status
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension, public
+AS $$
+    SELECT *
+    FROM dblink(conn_name, 'SHOW pool_pools') AS foo (
+        pool_pid integer,
+        start_time text,
+        pool_id integer,
+        backend_id integer,
+        database text,
+        username text,
+        create_time text,
+        majorversion integer,
+        minorversion integer,
+        pool_counter integer,
+        pool_backendpid integer,
+        pool_connected integer
+    )
+    WHERE pool_backendpid <> 0 AND pool_backendpid = backend_pid;
+$$;
+
+REVOKE ALL ON FUNCTION efm_extension.pgpool_backendpid_details(text, integer) FROM PUBLIC;
+
+-- Update add_pgpool_monitoring with input validation and encryption key fallback
+CREATE OR REPLACE FUNCTION efm_extension.add_pgpool_monitoring(
+    hostname text,
+    port integer,
+    database text,
+    username text,
+    password text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, efm_extension
+AS $$
+BEGIN
+    -- Validate hostname: no whitespace or special characters that could inject conninfo keys
+    IF hostname IS NULL OR hostname !~ '^[a-zA-Z0-9][a-zA-Z0-9.\-]*$' THEN
+        RAISE EXCEPTION 'Invalid hostname format: must be DNS hostname or IPv4 address (alphanumeric, dots, hyphens)';
+    END IF;
+
+    -- Validate port range
+    IF port IS NULL OR port < 1 OR port > 65535 THEN
+        RAISE EXCEPTION 'Invalid port: must be between 1 and 65535';
+    END IF;
+
+    -- Validate database and username: no whitespace
+    IF database IS NULL OR database ~ '\s' THEN
+        RAISE EXCEPTION 'Invalid database name: cannot contain whitespace';
+    END IF;
+
+    IF username IS NULL OR username ~ '\s' THEN
+        RAISE EXCEPTION 'Invalid username: cannot contain whitespace';
+    END IF;
+
+    -- Use efm.encryption_key GUC instead of hardcoded key for security
+    -- current_setting with missing_ok=true returns NULL if GUC not loaded; fallback to 'efm'
+    INSERT INTO efm_extension.pgpool_nodes
+    VALUES (hostname, port, database, username, efm_extension.encrypt_efm(password, COALESCE(pg_catalog.current_setting('efm.encryption_key', true), 'efm')));
+    RETURN true;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE;  -- Re-raise validation errors
+END;
+$$;
+
+REVOKE ALL ON FUNCTION efm_extension.add_pgpool_monitoring(text, integer, text, text, text) FROM PUBLIC;
