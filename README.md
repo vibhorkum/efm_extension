@@ -72,7 +72,30 @@ postgres ALL=(efm) NOPASSWD: EFM_WRITE
 postgres ALL=(efm) NOPASSWD: EFM_CRITICAL
 ```
 
-### 3. PostgreSQL Configuration
+### 3. Java Environment
+EFM is a Java application. Ensure `JAVA_HOME` is set in the PostgreSQL server environment:
+
+```bash
+# Option 1: Set in PostgreSQL service file (systemd)
+# /etc/systemd/system/postgresql.service.d/java.conf
+[Service]
+Environment="JAVA_HOME=/usr/lib/jvm/java-11-openjdk"
+
+# Option 2: Set in postgresql environment file
+# /etc/postgresql/16/main/environment (Debian/Ubuntu)
+JAVA_HOME='/usr/lib/jvm/java-11-openjdk'
+
+# Option 3: Set in postgres user's profile
+# ~postgres/.bashrc or ~postgres/.bash_profile
+export JAVA_HOME=/usr/lib/jvm/java-11-openjdk
+```
+
+After setting, restart PostgreSQL. Verify with:
+```sql
+SELECT getenv('JAVA_HOME');  -- Requires PL/Python or similar
+```
+
+### 4. PostgreSQL Configuration
 Set GUC parameters in `postgresql.conf` or via `ALTER SYSTEM`:
 
 ```sql
@@ -90,7 +113,7 @@ ALTER SYSTEM SET efm.cache_ttl TO 5;  -- seconds, 0 = disabled
 SELECT pg_reload_conf();
 ```
 
-### 4. Background Worker (Optional)
+### 5. Background Worker (Optional)
 For caching and history persistence, add to `postgresql.conf`:
 
 ```

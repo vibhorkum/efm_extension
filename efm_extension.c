@@ -575,17 +575,30 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         /*
          * Execute command with minimal environment for sudo to work
          * We need PATH for sudo to find shells and HOME for some sudo configs
-         * Also pass through MOCK_EFM_* variables for testing
+         * Also pass through JAVA_HOME (required by EFM) and test variables
          */
         {
-            char *envp[8];
+            char *envp[12];
             int env_idx = 0;
+            char *java_home;
             char *mock_mode;
             char *mock_delay;
 
             envp[env_idx++] = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
             envp[env_idx++] = "HOME=/tmp";
             envp[env_idx++] = "LANG=C";
+
+            /*
+             * EFM is a Java application - pass through JAVA_HOME if set.
+             * Without this, EFM may fail with exit code 1 and no stderr output.
+             */
+            java_home = getenv("JAVA_HOME");
+            if (java_home)
+            {
+                static char java_home_env[512];
+                snprintf(java_home_env, sizeof(java_home_env), "JAVA_HOME=%s", java_home);
+                envp[env_idx++] = java_home_env;
+            }
 
             /* Pass through mock test variables if present */
             mock_mode = getenv("MOCK_EFM_MODE");
