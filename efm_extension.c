@@ -106,7 +106,7 @@ static const EfmErrorMapping efm_errors[] = {
     {-1,  ERRCODE_SYSTEM_ERROR,                     "EFM process terminated by signal"},
     {-2,  ERRCODE_SYSTEM_ERROR,                     "EFM process exited with unknown status"},
     {-3,  ERRCODE_QUERY_CANCELED,                   "EFM command timed out"},
-    {-4,  ERRCODE_SYSTEM_ERROR,                     "Failed to wait for EFM process"},
+    {-4,  ERRCODE_SYSTEM_ERROR,                     "I/O error or wait failure"},
 };
 
 /*

@@ -15,13 +15,17 @@
 /*
  * Result structure for command execution
  *
- * Internal exit codes (negative values):
- *   -1: fork() failed
- *   -2: pipe() or other setup failed
+ * Internal exit codes (negative values, set by efm_exec_command):
+ *   -1: Child process terminated by signal (WIFSIGNALED)
+ *   -2: Unknown wait status (neither WIFEXITED nor WIFSIGNALED)
  *   -3: Command timed out
- *   -4: I/O error reading command output
+ *   -4: I/O error reading command output, or wait() failed
  *
- * Positive exit codes are from the EFM command itself.
+ * Note: fork()/pipe() failures raise ereport(ERROR) directly rather than
+ * returning a result structure, so callers won't see those as exit codes.
+ *
+ * Positive exit codes (0-255) are from the EFM command itself.
+ * EFM quirk: cluster-status-json may return exit code 1 with valid JSON.
  */
 typedef struct EfmExecResult
 {
