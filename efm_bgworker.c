@@ -359,7 +359,13 @@ efm_bgworker_main(Datum main_arg)
             /* Note: efm_exec_command already appends efm_cluster_name internally */
             result = efm_exec_command("cluster-status-json", NULL, 0);
 
-            if (result->exit_code == 0 && result->stdout_data)
+            /*
+             * EFM quirk: cluster-status-json may return exit code 1 even on success.
+             * Accept exit_code 0 or (exit_code 1 with valid JSON starting with '{').
+             */
+            if (result->stdout_data && result->stdout_len > 0 &&
+                (result->exit_code == 0 ||
+                 (result->exit_code == 1 && result->stdout_data[0] == '{')))
             {
                 /* Update shared memory cache */
                 efm_update_cache(result->stdout_data, result->stdout_len);
