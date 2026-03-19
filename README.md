@@ -67,9 +67,10 @@ Cmnd_Alias EFM_WRITE = /usr/edb/efm-*/bin/efm allow-node *, \
 Cmnd_Alias EFM_CRITICAL = /usr/edb/efm-*/bin/efm promote *
 
 # Grant permissions (adjust user as needed)
-postgres ALL=(efm) NOPASSWD: EFM_READONLY
-postgres ALL=(efm) NOPASSWD: EFM_WRITE
-postgres ALL=(efm) NOPASSWD: EFM_CRITICAL
+# SETENV allows passing JAVA_HOME which EFM requires
+postgres ALL=(efm) NOPASSWD: SETENV: EFM_READONLY
+postgres ALL=(efm) NOPASSWD: SETENV: EFM_WRITE
+postgres ALL=(efm) NOPASSWD: SETENV: EFM_CRITICAL
 ```
 
 ### 3. PostgreSQL Configuration

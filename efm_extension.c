@@ -461,12 +461,20 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
     if (efm_debug)
     {
         StringInfoData cmd_str;
+        char *java_home;
         int i;
 
         initStringInfo(&cmd_str);
-        appendStringInfo(&cmd_str, "%s -n -u %s %s %s %s",
+        appendStringInfo(&cmd_str, "%s -n -u %s",
                          efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo",
-                         efm_sudo_user ? efm_sudo_user : "efm",
+                         efm_sudo_user ? efm_sudo_user : "efm");
+
+        /* Show JAVA_HOME if configured */
+        java_home = (efm_java_home && *efm_java_home) ? efm_java_home : getenv("JAVA_HOME");
+        if (java_home)
+            appendStringInfo(&cmd_str, " JAVA_HOME=%s", java_home);
+
+        appendStringInfo(&cmd_str, " %s %s %s",
                          efm_path_command,
                          efm_cmd,
                          efm_cluster_name);
@@ -554,53 +562,62 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
 
-        /* Build argument array for execve */
-        /* Format: sudo -n -u efm /path/to/efm <cmd> <cluster> [args...] */
-        argv = malloc((7 + nargs + 1) * sizeof(char *));
-        if (!argv)
-            _exit(127);
-
-        argv[argc++] = efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo";
-        argv[argc++] = "-n";  /* Non-interactive - don't prompt for password */
-        argv[argc++] = "-u";
-        argv[argc++] = efm_sudo_user ? efm_sudo_user : "efm";
-        argv[argc++] = efm_path_command;
-        argv[argc++] = (char *)efm_cmd;
-        argv[argc++] = efm_cluster_name;
-
-        for (i = 0; i < nargs; i++)
-            argv[argc++] = args[i];
-
-        argv[argc] = NULL;
-
         /*
-         * Execute command with minimal environment for sudo to work
-         * We need PATH for sudo to find shells and HOME for some sudo configs
-         * Also pass through JAVA_HOME (required by EFM) and test variables
+         * Build argument array for execve
+         * Format: sudo -n -u efm [JAVA_HOME=...] /path/to/efm <cmd> <cluster> [args...]
+         *
+         * IMPORTANT: JAVA_HOME must be passed as a sudo argument, not just in the
+         * environment, because sudo strips environment variables by default.
          */
         {
-            char *envp[12];
-            int env_idx = 0;
             char *java_home;
+            static char java_home_arg[512];
+
+            /* Get JAVA_HOME: GUC takes precedence over environment */
+            java_home = (efm_java_home && *efm_java_home) ? efm_java_home : getenv("JAVA_HOME");
+
+            /* Allocate argv: base args (7) + optional JAVA_HOME (1) + user args + NULL */
+            argv = malloc((8 + nargs + 1) * sizeof(char *));
+            if (!argv)
+                _exit(127);
+
+            argv[argc++] = efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo";
+            argv[argc++] = "-n";  /* Non-interactive - don't prompt for password */
+            argv[argc++] = "-u";
+            argv[argc++] = efm_sudo_user ? efm_sudo_user : "efm";
+
+            /* Pass JAVA_HOME through sudo as VAR=value argument */
+            if (java_home)
+            {
+                snprintf(java_home_arg, sizeof(java_home_arg), "JAVA_HOME=%s", java_home);
+                argv[argc++] = java_home_arg;
+            }
+
+            argv[argc++] = efm_path_command;
+            argv[argc++] = (char *)efm_cmd;
+            argv[argc++] = efm_cluster_name;
+
+            for (i = 0; i < nargs; i++)
+                argv[argc++] = args[i];
+
+            argv[argc] = NULL;
+        }
+
+        /*
+         * Execute command with minimal environment for sudo to work.
+         * We need PATH for sudo to find shells and HOME for some sudo configs.
+         * Note: JAVA_HOME is passed as a sudo argument above, not here,
+         * because sudo strips environment variables by default.
+         */
+        {
+            char *envp[10];
+            int env_idx = 0;
             char *mock_mode;
             char *mock_delay;
 
             envp[env_idx++] = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
             envp[env_idx++] = "HOME=/tmp";
             envp[env_idx++] = "LANG=C";
-
-            /*
-             * EFM is a Java application - JAVA_HOME is required.
-             * Use efm.java_home GUC if set, otherwise fall back to environment.
-             * Without this, EFM may fail with exit code 1 and no stderr output.
-             */
-            java_home = (efm_java_home && *efm_java_home) ? efm_java_home : getenv("JAVA_HOME");
-            if (java_home)
-            {
-                static char java_home_env[512];
-                snprintf(java_home_env, sizeof(java_home_env), "JAVA_HOME=%s", java_home);
-                envp[env_idx++] = java_home_env;
-            }
 
             /* Pass through mock test variables if present */
             mock_mode = getenv("MOCK_EFM_MODE");
