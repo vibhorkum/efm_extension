@@ -1,0 +1,75 @@
+# docker-compose.yml for efm_extension testing
+#
+# Usage:
+#   docker-compose build
+#   docker-compose up -d
+#   docker-compose exec postgres /tests/run_all_tests.sh
+#   docker-compose down
+
+version: '3.8'
+
+services:
+  postgres:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PG_VERSION: "16"
+    container_name: efm_extension_test
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testdb
+      # Mock EFM settings
+      MOCK_EFM_MODE: normal
+      MOCK_EFM_DELAY: "0"
+    ports:
+      - "5499:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./tests:/tests:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Service for testing EFM down scenario
+  postgres_efm_down:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PG_VERSION: "16"
+    container_name: efm_extension_test_efm_down
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testdb
+      MOCK_EFM_MODE: down
+    ports:
+      - "5434:5432"
+    profiles:
+      - efm_down_test
+
+  # Service for testing timeout scenario
+  postgres_efm_timeout:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PG_VERSION: "16"
+    container_name: efm_extension_test_timeout
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testdb
+      MOCK_EFM_MODE: timeout
+    ports:
+      - "5435:5432"
+    profiles:
+      - timeout_test
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: efm_extension_test_net

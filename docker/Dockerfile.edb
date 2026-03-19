@@ -1,0 +1,96 @@
+# Dockerfile.edb - Build with real EFM using EDB subscription
+#
+# This Dockerfile installs the actual EDB Failover Manager using your
+# EDB subscription credentials. Use this for integration testing with real EFM.
+#
+# Build arguments (required):
+#   EDB_SUBSCRIPTION_TOKEN - Your EDB subscription token
+#
+# Optional build arguments:
+#   PG_VERSION - PostgreSQL major version (default: 16)
+#   EFM_VERSION - EFM version to install (default: 4.9)
+#
+# Usage:
+#   docker build -f Dockerfile.edb \
+#     --build-arg EDB_SUBSCRIPTION_TOKEN=your_token_here \
+#     --build-arg PG_VERSION=16 \
+#     --build-arg EFM_VERSION=4.9 \
+#     -t efm_extension_test:edb .
+
+ARG PG_VERSION=16
+FROM postgres:${PG_VERSION}
+
+# Build arguments
+ARG EDB_SUBSCRIPTION_TOKEN
+ARG EFM_VERSION=4.9
+ARG PG_VERSION=16
+
+# Validate subscription token is provided
+RUN if [ -z "$EDB_SUBSCRIPTION_TOKEN" ]; then \
+        echo "ERROR: EDB_SUBSCRIPTION_TOKEN build argument is required"; \
+        echo "Usage: docker build --build-arg EDB_SUBSCRIPTION_TOKEN=your_token ..."; \
+        exit 1; \
+    fi
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    postgresql-server-dev-${PG_MAJOR} \
+    curl \
+    gnupg2 \
+    lsb-release \
+    sudo \
+    default-jre-headless \
+    gettext-base \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup EDB repository with subscription token
+RUN curl -1sSLf "https://downloads.enterprisedb.com/${EDB_SUBSCRIPTION_TOKEN}/enterprise/setup.deb.sh" | bash
+
+# Install EDB Failover Manager
+RUN apt-get update && apt-get install -y \
+    edb-efm$(echo ${EFM_VERSION} | tr -d '.') \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create efm user if it doesn't exist
+RUN id -u efm &>/dev/null || useradd -m -s /bin/bash efm
+
+# Setup sudo permissions for postgres user to run EFM commands
+RUN echo "postgres ALL=(efm) NOPASSWD: /usr/edb/efm-${EFM_VERSION}/bin/efm" > /etc/sudoers.d/efm_postgres \
+    && chmod 440 /etc/sudoers.d/efm_postgres
+
+# Copy extension source and build
+WORKDIR /build/efm_extension
+COPY . .
+RUN make clean && make && make install
+
+# Create EFM configuration directory
+RUN mkdir -p /etc/edb/efm-${EFM_VERSION} \
+    && chown efm:efm /etc/edb/efm-${EFM_VERSION}
+
+# Copy test configuration template
+COPY docker/efm.properties.template /etc/edb/efm-${EFM_VERSION}/efm.properties.template
+
+# Copy initialization script
+COPY docker/init-efm.sh /docker-entrypoint-initdb.d/99-init-efm.sh
+RUN chmod +x /docker-entrypoint-initdb.d/99-init-efm.sh
+
+# Copy test scripts
+COPY docker/tests/ /tests/
+RUN chmod +x /tests/*.sh
+
+# Set EFM version for runtime scripts
+ENV EFM_VERSION=${EFM_VERSION}
+
+# Configure PostgreSQL
+RUN echo "shared_preload_libraries = 'efm_extension'" >> /usr/share/postgresql/postgresql.conf.sample \
+    && echo "efm.cluster_name = 'efm'" >> /usr/share/postgresql/postgresql.conf.sample \
+    && echo "efm.command_path = '/usr/edb/efm-${EFM_VERSION}/bin/efm'" >> /usr/share/postgresql/postgresql.conf.sample \
+    && echo "efm.properties_location = '/etc/edb/efm-${EFM_VERSION}'" >> /usr/share/postgresql/postgresql.conf.sample \
+    && echo "efm.cache_ttl = 5" >> /usr/share/postgresql/postgresql.conf.sample
+
+# Health check
+HEALTHCHECK --interval=5s --timeout=5s --start-period=30s \
+    CMD pg_isready -U postgres && /usr/edb/efm-${EFM_VERSION}/bin/efm cluster-status efm || exit 1
+
+CMD ["postgres"]

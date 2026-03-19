@@ -1,0 +1,78 @@
+# EFM Properties Template
+# This file is used to generate efm.properties during container initialization
+# Variables like ${VAR} are replaced by init-efm.sh
+
+# License (leave empty for trial)
+efm.license=
+
+# Database connection settings
+db.user=efm
+db.password.encrypted=${EFM_DB_PASSWORD_ENCRYPTED}
+db.port=5432
+db.database=postgres
+db.service.owner=postgres
+db.service.name=postgresql
+db.bin=/usr/lib/postgresql/${PG_MAJOR}/bin
+db.data.dir=/var/lib/postgresql/data
+db.recovery.conf.dir=/var/lib/postgresql/data
+
+# JDBC settings
+jdbc.ssl=false
+jdbc.ssl.mode=verify-ca
+
+# Network settings
+bind.address=${BIND_ADDRESS}:7800
+admin.port=7809
+
+# Node settings
+is.witness=false
+promotable=true
+priority=1
+
+# Timeouts
+local.period=10
+local.timeout=60
+local.timeout.final=10
+remote.timeout=10
+node.timeout=50
+
+# Ping settings for split-brain detection
+pingServerIp=8.8.8.8
+pingServerCommand=/bin/ping -q -c3 -w5
+
+# Auto settings
+auto.allow.hosts=true
+auto.failover=true
+auto.reconfigure=true
+auto.resume.period=0
+
+# Standby settings
+minimum.standbys=0
+recovery.check.period=2
+
+# VIP settings (optional)
+virtualIp=
+virtualIp.interface=
+virtualIp.prefix=
+
+# Scripts (optional)
+script.fence=
+script.post.promotion=
+script.resumed=
+script.db.failure=
+script.primary.isolated=
+script.notification=
+
+# Sudo settings
+sudo.command=sudo
+sudo.user.command=sudo -u %u
+
+# Logging
+jgroups.loglevel=INFO
+efm.loglevel=INFO
+
+# JVM options
+jvm.options=-Xmx128m
+
+# Database connection reuse
+db.reuse.connection.count=0
