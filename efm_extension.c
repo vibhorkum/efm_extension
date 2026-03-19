@@ -820,6 +820,17 @@ efm_check_result(EfmExecResult *result, const char *operation)
     if (result->exit_code == 0)
         return;
 
+    /*
+     * EFM quirk: cluster-status-json returns exit code 1 even on success.
+     * If we got valid JSON output (starts with '{'), treat it as success.
+     */
+    if (result->exit_code == 1 &&
+        result->stdout_data && result->stdout_len > 0 &&
+        result->stdout_data[0] == '{')
+    {
+        return;  /* Valid JSON output, ignore exit code 1 */
+    }
+
     /* Save values we need for error message */
     exit_code = result->exit_code;
     if (result->stderr_data && result->stderr_len > 0)
@@ -1844,7 +1855,14 @@ efm_is_available(PG_FUNCTION_ARGS)
 
         result = efm_exec_command("cluster-status-json", NULL, 0);
 
-        if (result->exit_code == 0)
+        /*
+         * EFM quirk: cluster-status-json returns exit code 1 even on success.
+         * Check for valid JSON output (starts with '{') to determine success.
+         */
+        if (result->exit_code == 0 ||
+            (result->exit_code == 1 &&
+             result->stdout_data && result->stdout_len > 0 &&
+             result->stdout_data[0] == '{'))
         {
             is_available = true;
             error_message = "EFM is available and responding";
