@@ -88,7 +88,6 @@ efm_shmem_startup(void)
          * This is the standard approach for extension-owned locks.
          */
         LWLockInitialize(&efm_cache->lock, LWLockNewTrancheId());
-        LWLockRegisterTranche(efm_cache->lock.tranche, "efm_extension");
 
         efm_cache->last_update = 0;
         efm_cache->hits = 0;
@@ -96,6 +95,13 @@ efm_shmem_startup(void)
         efm_cache->updates = 0;
         efm_cache->data_len = 0;
     }
+
+    /*
+     * Register tranche name unconditionally. Tranche registration is per-process,
+     * so every backend attaching to the shared memory needs to register the name.
+     * The tranche ID is stored in the lock structure in shared memory.
+     */
+    LWLockRegisterTranche(efm_cache->lock.tranche, "efm_extension");
 
     LWLockRelease(AddinShmemInitLock);
 }
