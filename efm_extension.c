@@ -106,7 +106,8 @@ static const EfmErrorMapping efm_errors[] = {
     {-1,  ERRCODE_SYSTEM_ERROR,                     "EFM process terminated by signal"},
     {-2,  ERRCODE_SYSTEM_ERROR,                     "EFM process exited with unknown status"},
     {-3,  ERRCODE_QUERY_CANCELED,                   "EFM command timed out"},
-    {-4,  ERRCODE_SYSTEM_ERROR,                     "I/O error or wait failure"},
+    {-4,  ERRCODE_SYSTEM_ERROR,                     "I/O error reading command output"},
+    {-5,  ERRCODE_SYSTEM_ERROR,                     "Failed to wait for child process"},
 };
 
 /*
@@ -773,7 +774,7 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
 
     if (wait_result < 0)
     {
-        result->exit_code = -4;  /* Wait failed */
+        result->exit_code = -5;  /* waitpid() failed */
         return result;
     }
 
@@ -1877,6 +1878,11 @@ efm_is_available(PG_FUNCTION_ARGS)
         {
             error_code = 7;
             error_message = "I/O error reading EFM command output";
+        }
+        else if (result->exit_code == -5)
+        {
+            error_code = 8;
+            error_message = "Failed to wait for EFM child process";
         }
         else if (result->exit_code == 127)
         {

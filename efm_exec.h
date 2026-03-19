@@ -19,7 +19,8 @@
  *   -1: Child process terminated by signal (WIFSIGNALED)
  *   -2: Unknown wait status (neither WIFEXITED nor WIFSIGNALED)
  *   -3: Command timed out
- *   -4: I/O error reading command output, or wait() failed
+ *   -4: I/O error reading command output (pipe read failure)
+ *   -5: waitpid() failed
  *
  * Note: fork()/pipe() failures raise ereport(ERROR) directly rather than
  * returning a result structure, so callers won't see those as exit codes.
