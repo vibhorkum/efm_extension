@@ -72,30 +72,7 @@ postgres ALL=(efm) NOPASSWD: EFM_WRITE
 postgres ALL=(efm) NOPASSWD: EFM_CRITICAL
 ```
 
-### 3. Java Environment
-EFM is a Java application. Ensure `JAVA_HOME` is set in the PostgreSQL server environment:
-
-```bash
-# Option 1: Set in PostgreSQL service file (systemd)
-# /etc/systemd/system/postgresql.service.d/java.conf
-[Service]
-Environment="JAVA_HOME=/usr/lib/jvm/java-11-openjdk"
-
-# Option 2: Set in postgresql environment file
-# /etc/postgresql/16/main/environment (Debian/Ubuntu)
-JAVA_HOME='/usr/lib/jvm/java-11-openjdk'
-
-# Option 3: Set in postgres user's profile
-# ~postgres/.bashrc or ~postgres/.bash_profile
-export JAVA_HOME=/usr/lib/jvm/java-11-openjdk
-```
-
-After setting, restart PostgreSQL. Verify with:
-```sql
-SELECT getenv('JAVA_HOME');  -- Requires PL/Python or similar
-```
-
-### 4. PostgreSQL Configuration
+### 3. PostgreSQL Configuration
 Set GUC parameters in `postgresql.conf` or via `ALTER SYSTEM`:
 
 ```sql
@@ -103,6 +80,7 @@ Set GUC parameters in `postgresql.conf` or via `ALTER SYSTEM`:
 ALTER SYSTEM SET efm.cluster_name TO 'efm';
 ALTER SYSTEM SET efm.command_path TO '/usr/edb/efm-4.9/bin/efm';
 ALTER SYSTEM SET efm.properties_location TO '/etc/edb/efm-4.9';
+ALTER SYSTEM SET efm.java_home TO '/usr/lib/jvm/java-11-openjdk';  -- Required for EFM
 
 -- Optional settings (shown with defaults)
 ALTER SYSTEM SET efm.sudo_path TO '/usr/bin/sudo';
@@ -113,7 +91,7 @@ ALTER SYSTEM SET efm.cache_ttl TO 5;  -- seconds, 0 = disabled
 SELECT pg_reload_conf();
 ```
 
-### 5. Background Worker (Optional)
+### 4. Background Worker (Optional)
 For caching and history persistence, add to `postgresql.conf`:
 
 ```
@@ -274,6 +252,7 @@ SELECT * FROM efm_extension.efm_local_properties;
 | `efm.sudo_path` | string | `/usr/bin/sudo` | Path to sudo |
 | `efm.sudo_user` | string | `efm` | User to run EFM commands as |
 | `efm.properties_location` | string | `/etc/edb/efm-4.9` | EFM config directory |
+| `efm.java_home` | string | (from env) | Path to Java installation (JAVA_HOME) |
 | `efm.cache_ttl` | integer | `5` | Cache TTL in seconds (0 = disabled) |
 | `efm.bgw_enabled` | boolean | `false` | Enable background worker |
 | `efm.bgw_interval` | integer | `10` | BGW polling interval (seconds) |

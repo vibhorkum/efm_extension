@@ -74,6 +74,7 @@ char *efm_sudo_user = NULL;
 char *efm_cluster_name = NULL;
 char *efm_properties_file_loc = NULL;
 char *efm_encryption_key = NULL;
+char *efm_java_home = NULL;
 bool efm_debug = false;
 
 /* Internal function declarations */
@@ -589,10 +590,11 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
             envp[env_idx++] = "LANG=C";
 
             /*
-             * EFM is a Java application - pass through JAVA_HOME if set.
+             * EFM is a Java application - JAVA_HOME is required.
+             * Use efm.java_home GUC if set, otherwise fall back to environment.
              * Without this, EFM may fail with exit code 1 and no stderr output.
              */
-            java_home = getenv("JAVA_HOME");
+            java_home = (efm_java_home && *efm_java_home) ? efm_java_home : getenv("JAVA_HOME");
             if (java_home)
             {
                 static char java_home_env[512];
@@ -2005,6 +2007,15 @@ _PG_init(void)
                                "Example: /etc/edb/efm-4.9",
                                &efm_properties_file_loc,
                                "/etc/edb/efm-4.9",
+                               PGC_SUSET,
+                               0,
+                               NULL, NULL, NULL);
+
+    DefineCustomStringVariable("efm.java_home",
+                               "Path to Java installation (JAVA_HOME)",
+                               "Required for EFM. If not set, falls back to JAVA_HOME environment variable.",
+                               &efm_java_home,
+                               NULL,   /* no default - use environment */
                                PGC_SUSET,
                                0,
                                NULL, NULL, NULL);
