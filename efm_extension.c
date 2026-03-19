@@ -469,10 +469,13 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
                          efm_sudo_path ? efm_sudo_path : "/usr/bin/sudo",
                          efm_sudo_user ? efm_sudo_user : "efm");
 
-        /* Show JAVA_HOME if configured */
+        /* Show PATH and JAVA_HOME if configured */
         java_home = (efm_java_home && *efm_java_home) ? efm_java_home : getenv("JAVA_HOME");
         if (java_home)
-            appendStringInfo(&cmd_str, " JAVA_HOME=%s", java_home);
+        {
+            appendStringInfo(&cmd_str, " PATH=%s/bin:... JAVA_HOME=%s",
+                             java_home, java_home);
+        }
 
         appendStringInfo(&cmd_str, " %s %s %s",
                          efm_path_command,
@@ -564,20 +567,22 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
 
         /*
          * Build argument array for execve
-         * Format: sudo -n -u efm [JAVA_HOME=...] /path/to/efm <cmd> <cluster> [args...]
+         * Format: sudo -n -u efm [PATH=...] [JAVA_HOME=...] /path/to/efm <cmd> <cluster> [args...]
          *
-         * IMPORTANT: JAVA_HOME must be passed as a sudo argument, not just in the
-         * environment, because sudo strips environment variables by default.
+         * IMPORTANT: Environment variables must be passed as sudo arguments,
+         * not just in the environment, because sudo strips them by default.
+         * EFM needs both JAVA_HOME and PATH (with java binary location).
          */
         {
             char *java_home;
             static char java_home_arg[512];
+            static char path_arg[1024];
 
             /* Get JAVA_HOME: GUC takes precedence over environment */
             java_home = (efm_java_home && *efm_java_home) ? efm_java_home : getenv("JAVA_HOME");
 
-            /* Allocate argv: base args (7) + optional JAVA_HOME (1) + user args + NULL */
-            argv = malloc((8 + nargs + 1) * sizeof(char *));
+            /* Allocate argv: base args (7) + optional PATH (1) + optional JAVA_HOME (1) + user args + NULL */
+            argv = malloc((9 + nargs + 1) * sizeof(char *));
             if (!argv)
                 _exit(127);
 
@@ -586,9 +591,17 @@ efm_exec_command(const char *efm_cmd, char **args, int nargs)
             argv[argc++] = "-u";
             argv[argc++] = efm_sudo_user ? efm_sudo_user : "efm";
 
-            /* Pass JAVA_HOME through sudo as VAR=value argument */
+            /*
+             * Pass PATH and JAVA_HOME through sudo as VAR=value arguments.
+             * EFM scripts need 'java' in PATH, so include JAVA_HOME/bin.
+             */
             if (java_home)
             {
+                snprintf(path_arg, sizeof(path_arg),
+                         "PATH=%s/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                         java_home);
+                argv[argc++] = path_arg;
+
                 snprintf(java_home_arg, sizeof(java_home_arg), "JAVA_HOME=%s", java_home);
                 argv[argc++] = java_home_arg;
             }
